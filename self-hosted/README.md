@@ -8,21 +8,7 @@ The room actions and discussions are independent implementations.
 
 ## Current status
 
-Server-side room operations, authentication configuration, PDF streaming and
-upload publication are implemented. The first browser interface covers sign-in,
-rooms, stages, PDF publication/viewing, member management, discussions, mentions,
-resolution history and activity. The production build passes. Browser workflows
-and external services are not yet verified; do not deploy this as ready yet.
-
-The owner authorized all necessary security dependency upgrades for this fork.
-Next.js 16.4.3, NextAuth 4.24.15, React 19.3.1, React-PDF 11 and Zod 4.6.7 are
-installed. The dedicated entrypoint dependency audit reports zero known
-vulnerabilities as of 2026-10-26. This does not describe upstream root dependencies.
-Six database integration tests and type-checking pass after the upgrades.
-
-Local preview launch was rejected by automatic approval review, including a
-localhost-only attempt, with no explanation beyond "blocked by policy". Visual
-and browser-flow verification remain outstanding. No production app was deployed.
+Deployed at https://dealroom.horseup.de. See [deployment record](DEPLOYMENT.md) for the pinned source, completed checks, backup restore evidence and remaining operational checks. The isolated runtime dependency audit reports zero known advisories as checked on 2026-10-26; unused upstream root dependencies are outside this result.
 
 ## Local database verification
 
@@ -45,7 +31,7 @@ The pure access-policy suite is
 These are unit and database integration tests. They do not verify browser flows,
 real email delivery, S3 transfers, deployment, backup restore, or TLS.
 
-## Deployment requirements still to complete
+## Deployment checklist reference
 
 - Patched dependencies, working UI, verified production build and container.
 - Provision the standalone PostgreSQL database and apply reviewed migrations.
@@ -60,3 +46,4 @@ real email delivery, S3 transfers, deployment, backup restore, or TLS.
 Published files are identified by immutable S3 version IDs. Investor PDF requests
 are authorized against current room membership, document selection and stage on
 every request. A later revocation cannot erase content a visitor already received.
+

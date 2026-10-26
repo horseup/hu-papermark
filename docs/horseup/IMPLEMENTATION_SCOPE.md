@@ -14,7 +14,7 @@ Status: AWS host and S3 provisioned; application implementation and deployment p
 - Questions and comments are shared among members of that room and administrators, never across investor rooms.
 - Discussions/messages need server timestamps, stable chronological ordering, resolve/reopen state with actor/time, and references or @mentions limited to eligible room participants.
 - Preserve original document-version/page context for discussions after document updates (approved).
-- Google Drive-backed room copies are under evaluation; no architecture switch approved.
+- Google Drive is the authoring tool; manually export approved PDFs to the central library. No Drive integration in this release.
 - Reuse eligible upstream login, document viewing, and page/duration analytics where feasible.
 - Send invitations through Resend; retain NextAuth email-link sign-in. Clerk was explicitly declined.
 
@@ -22,11 +22,11 @@ Status: AWS host and S3 provisioned; application implementation and deployment p
 
 - AWS Frankfurt, new hu-papermark host, provisioned using HorseUp instance runbook.
 - Approved and launched t3.medium: 2 vCPU, 4 GiB RAM, encrypted 40 GB gp3. Approved baseline budget: under USD 50/month.
-- PostgreSQL is planned on the app host but not installed yet. EU S3 bucket exists; 50 GiB planning target, warning at 35 GiB.
+- PostgreSQL 17 is running privately on the app host. EU S3 bucket exists; 50 GiB planning target, warning at 35 GiB.
 - Databasus for database backups to verified EU storage. Document backups require separate configuration.
-- Coolify and SSM are verified; dedicated SSH key installed. SSH is still on bootstrap port 22; final port 222 hardening follows the runbook after application deployment.
+- Coolify and SSM are verified; dedicated SSH key installed. SSH is hardened on port 222; password/root login and port 22 are disabled.
 - Intended public domain: dealroom.horseup.de.
-- AWS host, private versioned S3 bucket and Coolify server registration are complete. No application or DNS cutover yet.
+- AWS host, private versioned S3 bucket and Coolify server registration are complete. Application and DNS/TLS are live.
 
 ## Initial source audit
 
@@ -64,10 +64,10 @@ Status: AWS host and S3 provisioned; application implementation and deployment p
 
 ## Validation status
 
-The independent investor access policy is implemented in lib/horseup/rooms/access-policy.ts. Eight unit tests pass for access rules. The approved dedicated self-hosted entrypoint now contains server-side room operations, email-link authentication configuration, PDF streaming and publication, discussion history, mentions and visit/page reporting. Six database integration tests pass against disposable local PostgreSQL, along with the SQL constraint suite. They cover acceptance, stage enforcement, room isolation, discussion references/history, analytics and revocation. TypeScript checking passes. Browser flows, actual email/S3 transfers and deployment are not yet verified. No investor invitations have been sent.
+The dedicated HorseUp entrypoint is deployed at https://dealroom.horseup.de from fork commit 7c01e366acc16fdb984864ba14e3798d82c120c5. See ../../self-hosted/DEPLOYMENT.md for resources, verification and operational limitations.
 
-The user approved the dedicated HorseUp entrypoint inside the fork, excluding upstream enterprise/SaaS routes from the build, and subsequently authorized all necessary package and implementation changes for this fork. Patched framework/authentication/PDF packages are installed; the dedicated dependency audit reports zero known vulnerabilities. Its production build and six database integration tests pass. The first browser interface is implemented, but local preview launch was rejected by automatic approval review (including localhost-only binding), so browser verification and production deployment remain pending. No further user architecture approval is required.
+Eight access-policy unit tests, six disposable PostgreSQL integration tests and the SQL constraint suite passed. These prove policy and database behavior, not every investor browser journey. The dedicated dependency audit reports zero known advisories as checked on 2026-10-26; this does not cover unused upstream root dependencies.
 
-Docker, SSM, SSH and Coolify reachability/usable status were checked successfully; proxy and sentinel containers are running. CPU and S3 storage alarms are connected to the confirmed administrator email subscription. Further monitoring work is deferred at the user request.
+Live browser checks passed for Resend email-link authentication, administrator workspace, stage creation, PDF upload to S3, immutable publication, PDF viewing, discussion/reply and resolution. Synthetic fixtures are clearly labeled and contain no investor data. Investor invitation acceptance and multi-user browser behavior have not yet been exercised against the live deployment.
 
-Production deployment must use horseup/hu-papermark, with a verified commit from the implementation branch. No Coolify application or pinned deploy commit exists yet.
+Daily encrypted Databasus backups use a dedicated private Frankfurt S3 bucket and one-month retention. First backup and temporary restore verification succeeded: 90 tables, pg_restore exit code 0. Backup credentials are stored in Infisical. Source documents currently have S3 versioning; independent document replication remains an operational follow-up.
