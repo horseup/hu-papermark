@@ -36,7 +36,7 @@ Read-only PostgreSQL login hu_backup uses pg_read_all_data and cannot create tem
 
 First encrypted backup succeeded (0.31 MB). Databasus temporary restore verification succeeded: 90 tables, pg_restore exit code 0, restored size 13.64 MB. It verified five stages and the synthetic room/document/discussion records. This was a temporary restore, not an overwrite of the live database.
 
-Document bucket hu-papermark-documents-143207290060-eu-central-1 is private, encrypted and versioned. The app uses immutable S3 version IDs. Versioning is not an independent backup: independent document replication and its recovery mapping are still outstanding. No expiration policy may remove referenced versions.
+Document bucket hu-papermark-documents-143207290060-eu-central-1 is private, encrypted and versioned. The app uses immutable S3 version IDs. New objects and versions are asynchronously replicated to separate private versioned Frankfurt bucket hu-papermark-document-backups-143207290060-eu-central-1. Source delete markers are not replicated; the app role and Databasus IAM user cannot access this bucket. Original version IDs are retained. Replication applies to uploads after configuration, not the earlier synthetic fixture. No expiration policy may remove referenced versions.
 
 ## Evidence and limits
 
@@ -45,11 +45,15 @@ Document bucket hu-papermark-documents-143207290060-eu-central-1 is private, enc
 - Live browser: stage creation, S3 PDF upload/publication, PDF canvas, question/reply and resolve.
 - Eight policy unit tests, six disposable PostgreSQL integration tests and SQL constraints passed. These do not prove all live investor browser journeys.
 - Live investor invitation acceptance, mentions and simultaneous multi-user journeys remain to be exercised; no external investors were invited by deployment verification.
-- Synthetic fixture is named SYNTHETIC deployment verification; it contains no financial or investor information.
+- Synthetic fixture is named SYNTHETIC deployment verification; it contains no financial or investor information. Its room is archived. Discussion reopen was also verified.
 - Databasus failure notifications have no notifier selected yet. Existing CPU/storage SNS notifications go to the confirmed Rob address.
 
 ## Recovery notes
 
-During initial deployment the Coolify control server became unavailable after image build. The app was recovered using Coolify's generated Compose file with secrets populated from Infisical. Control service subsequently recovered, and its pin was reconciled to the runtime commit above. Do not infer successful future releases from a queued deployment: verify the exact commit, deployment result, container health and public endpoint.
+During initial deployment the Coolify control server became unavailable after image build. The app was recovered using Coolify's generated Compose file with secrets populated from Infisical. Control service subsequently recovered. Coolify deployment pjot4twt7ltyoc8pely2a0kk finished successfully at the pinned runtime commit after SSH hardening. Do not infer successful future releases from a queued deployment: verify the exact commit, deployment result, container health and public endpoint.
 
 On database recreation, check the backup relay, Databasus connection, successful new backup and temporary restore. On app changes, apply only the dedicated self-hosted migration ledger and retain an immediately preceding verified backup.
+
+
+Document recovery check: replication status COMPLETED; retrieved replica by the original S3 version ID. SHA-256 matched the source PDF (B628AB971246BC975E479B2729A7FB8D2504C60502638AB56B29FA723582506C). A second Databasus backup succeeded after switching to SSH222 and the stable loopback55433 relay.
+

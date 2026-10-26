@@ -70,4 +70,5 @@ Eight access-policy unit tests, six disposable PostgreSQL integration tests and 
 
 Live browser checks passed for Resend email-link authentication, administrator workspace, stage creation, PDF upload to S3, immutable publication, PDF viewing, discussion/reply and resolution. Synthetic fixtures are clearly labeled and contain no investor data. Investor invitation acceptance and multi-user browser behavior have not yet been exercised against the live deployment.
 
-Daily encrypted Databasus backups use a dedicated private Frankfurt S3 bucket and one-month retention. First backup and temporary restore verification succeeded: 90 tables, pg_restore exit code 0. Backup credentials are stored in Infisical. Source documents currently have S3 versioning; independent document replication remains an operational follow-up.
+Daily encrypted Databasus backups use a dedicated private Frankfurt S3 bucket and one-month retention. First backup and temporary restore verification succeeded: 90 tables, pg_restore exit code 0. Backup credentials are stored in Infisical. New document versions are replicated into a separate private Frankfurt bucket, preserving version IDs and excluding delete markers.
+
