@@ -52,7 +52,7 @@ Status: AWS host and S3 provisioned; application implementation and deployment p
 
 ## Decisions to settle before implementation
 
-- Whether room stage is the sole access ceiling or individual members may have lower ceilings.
+- Confirmed: one stage per room, shared by every member; no per-member stage.
 - Stage downgrade behavior and removal/reordering of stages with existing documents.
 - How discussions anchored to an old document page appear after a new version is uploaded.
 - Whether document downloads are permitted and how revocation limits apply to already downloaded files.
@@ -61,6 +61,6 @@ Status: AWS host and S3 provisioned; application implementation and deployment p
 
 ## Validation status
 
-No application code has been changed or tested. No investor invitations have been sent. Docker, SSM, SSH and Coolify reachability/usable status were checked successfully; proxy and sentinel containers are running. CPU and S3 storage alarms are connected to the confirmed administrator email subscription. Further monitoring work is deferred at the user request.
+The independent investor access policy is implemented in lib/horseup/rooms/access-policy.ts. Eight unit tests pass for access rules; no database/API/UI integration has been implemented or tested. No investor invitations have been sent. Docker, SSM, SSH and Coolify reachability/usable status were checked successfully; proxy and sentinel containers are running. CPU and S3 storage alarms are connected to the confirmed administrator email subscription. Further monitoring work is deferred at the user request.
 
 Production deployment must use horseup/hu-papermark, with a verified commit from the implementation branch. No Coolify application or pinned deploy commit exists yet.
