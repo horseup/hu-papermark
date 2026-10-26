@@ -1,0 +1,9 @@
+**/node_modules
+**/.next
+**/.generated
+**/.env*
+.git
+ee
+app
+pages
+**/*.tsbuildinfo
