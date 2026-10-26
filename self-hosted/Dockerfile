@@ -1,5 +1,5 @@
 FROM node:24.22.1-bookworm-slim AS build
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/self-hosted
 COPY self-hosted/package.json self-hosted/package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -11,7 +11,7 @@ RUN node scripts/prepare-prisma.mjs && node node_modules/prisma/build/index.js g
 RUN node node_modules/next/dist/bin/next build --webpack
 
 FROM node:24.22.1-bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 COPY --from=build --chown=node:node /app/self-hosted/.next/standalone ./

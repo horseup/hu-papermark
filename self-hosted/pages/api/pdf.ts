@@ -33,7 +33,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!object.Body) throw new Error('Empty document response');
     for await (const chunk of object.Body as AsyncIterable<Uint8Array>) {
       if (res.destroyed) break;
-      if (!res.write(chunk)) await new Promise<void>(resolve => { res.once('drain', resolve); res.once('close', resolve); });
+      if (!res.write(chunk)) await new Promise<void>(resolve => {
+        const done = () => { res.off('drain', done); res.off('close', done); resolve(); };
+        res.once('drain', done); res.once('close', done);
+      });
     }
     res.end();
   } catch (error) { if (res.headersSent) res.destroy(); else sendError(res, error); }
