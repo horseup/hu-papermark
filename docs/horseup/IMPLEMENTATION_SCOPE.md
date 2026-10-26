@@ -12,6 +12,9 @@ Status: AWS host and S3 provisioned; application implementation and deployment p
 - Configurable ordered access stages (approximately five initially).
 - Each document has a required access stage; advancing a room reveals eligible selected documents.
 - Questions and comments are shared among members of that room and administrators, never across investor rooms.
+- Discussions/messages need server timestamps, stable chronological ordering, resolve/reopen state with actor/time, and references or @mentions limited to eligible room participants.
+- Preserve original document-version/page context for discussions after document updates (approved).
+- Google Drive-backed room copies are under evaluation; no architecture switch approved.
 - Reuse eligible upstream login, document viewing, and page/duration analytics where feasible.
 - Send invitations through Resend; retain NextAuth email-link sign-in. Clerk was explicitly declined.
 
