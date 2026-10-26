@@ -1,6 +1,8 @@
+import { fileURLToPath } from 'node:url';
 /** HorseUp-only entrypoint: upstream app/, pages/ and middleware are not built. */
 const config = {
   output: 'standalone',
+  outputFileTracingRoot: fileURLToPath(new URL('../', import.meta.url)),
   reactStrictMode: true,
   experimental: { cpus: 1, externalDir: true },
   poweredByHeader: false,

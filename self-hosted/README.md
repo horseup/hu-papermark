@@ -9,12 +9,20 @@ The room actions and discussions are independent implementations.
 ## Current status
 
 Server-side room operations, authentication configuration, PDF streaming and
-upload publication are implemented. The browser interface and production build
-are unfinished. Do not deploy this directory as a ready application yet.
+upload publication are implemented. The first browser interface covers sign-in,
+rooms, stages, PDF publication/viewing, member management, discussions, mentions,
+resolution history and activity. The production build passes. Browser workflows
+and external services are not yet verified; do not deploy this as ready yet.
 
-Dependency auditing identified advisories in the inherited dependencies. Patched
-framework/authentication/PDF versions require adaptation and verification before
-deployment. The administrator has been asked to approve those upgrades.
+The owner authorized all necessary security dependency upgrades for this fork.
+Next.js 16.4.3, NextAuth 4.24.15, React 19.3.1, React-PDF 11 and Zod 4.6.7 are
+installed. The dedicated entrypoint dependency audit reports zero known
+vulnerabilities as of 2026-10-26. This does not describe upstream root dependencies.
+Six database integration tests and type-checking pass after the upgrades.
+
+Local preview launch was rejected by automatic approval review, including a
+localhost-only attempt, with no explanation beyond "blocked by policy". Visual
+and browser-flow verification remain outstanding. No production app was deployed.
 
 ## Local database verification
 

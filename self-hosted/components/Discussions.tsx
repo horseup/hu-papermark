@@ -1,0 +1,22 @@
+import { useState } from 'react';
+import { action } from '../lib/client';
+import type { RoomData, Discussion } from '../lib/room-types';
+export function Discussions({ data, reference, refresh, openReference }: { data: RoomData; reference: { documentId: string; versionId: string; page: number } | null; refresh: () => Promise<void>; openReference: (discussion: Discussion) => void }) {
+  const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [showResolved, setShowResolved] = useState(false);
+  const people = [...data.administrators, ...data.members.filter(m => m.acceptedAt && !m.revokedAt && m.userId).map(m => ({ id: m.userId!, email: m.email }))].filter((p, index, all) => all.findIndex(other => other.id === p.id) === index);
+  const mentions = <details><summary>@ Mention people</summary>{people.map(p => <label className="check" key={p.id}><input name="mentionIds" type="checkbox" value={p.id} />{p.email}</label>)}</details>;
+  async function run(name: string, values: Record<string, unknown>) { setBusy(true); setError(''); try { const result = await action(name, values); if (result.warning) setError(String(result.warning)); await refresh(); return true; } catch (err) { setError((err as Error).message); return false; } finally { setBusy(false); } }
+  return <aside className="discussions"><h2>Discussions</h2><p className="muted">Visible to everyone in this room and the HorseUp team.</p>
+    <details className="editor"><summary>Ask a question</summary><form onSubmit={async e => { e.preventDefault(); const form = e.currentTarget; const values = new FormData(form); const linked = values.get('link') === 'on' ? reference : null;
+      if (await run('createDiscussion', { roomId: data.room.id, title: values.get('title'), body: values.get('body'), documentId: linked?.documentId || null, versionId: linked?.versionId || null, pageNumber: linked?.page || null, mentionIds: values.getAll('mentionIds'), requestId: crypto.randomUUID() })) form.reset();
+    }}><label>Subject<input name="title" required maxLength={300} /></label><label>Question<textarea name="body" required maxLength={20000} /></label>{reference && <label className="check"><input type="checkbox" name="link" defaultChecked />Reference the current document, page {reference.page}</label>}{mentions}<button disabled={busy}>Post question</button></form></details>
+    {error && <p role="alert" className="error">{error}</p>}<label className="check"><input type="checkbox" checked={showResolved} onChange={e => setShowResolved(e.target.checked)} />Include resolved discussions</label>
+    {data.discussions.filter(d => showResolved || !d.resolvedAt).map(d => <article className="thread" key={d.id}><h3>{d.title}</h3>{d.resolvedAt && <small>Resolved</small>}
+      {d.documentId && <button className="quiet reference" onClick={() => openReference(d)}>View referenced version{d.pageNumber ? ` · page ${d.pageNumber}` : ''}</button>}
+      {d.messages.map(m => <div className="message" key={m.id}><strong>{m.author.name || m.author.email}</strong><time dateTime={m.createdAt}>{new Date(m.createdAt).toLocaleString()}</time><p>{m.body}</p>{m.mentions.length > 0 && <small>Mentioned: {m.mentions.map(mention => people.find(p => p.id === mention.userId)?.email || 'Former room member').join(', ')}</small>}</div>)}
+      {d.events.map((event, index) => <p className="muted" key={index}><small>{event.type === 'RESOLVED' ? 'Resolved' : 'Reopened'} by {event.actor.name || event.actor.email} · {new Date(event.createdAt).toLocaleString()}</small></p>)}
+      {(data.actor.admin || data.actor.id === d.createdById) && <button className="quiet" disabled={busy} onClick={() => run('resolveDiscussion', { roomId: data.room.id, discussionId: d.id, resolved: !d.resolvedAt })}>{d.resolvedAt ? 'Reopen discussion' : 'Resolve discussion'}</button>}
+      {!d.resolvedAt && <form onSubmit={async e => { e.preventDefault(); const form = e.currentTarget; const values = new FormData(form); if (await run('reply', { roomId: data.room.id, discussionId: d.id, body: values.get('body'), mentionIds: values.getAll('mentionIds'), requestId: crypto.randomUUID() })) form.reset(); }}><label>Reply<textarea name="body" required maxLength={20000} /></label>{mentions}<button disabled={busy}>Send reply</button></form>}
+    </article>)}{!data.discussions.length && <p className="empty">No questions yet. Start a discussion about the room or a document.</p>}
+  </aside>;
+}
