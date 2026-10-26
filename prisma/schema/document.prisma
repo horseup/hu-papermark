@@ -1,4 +1,8 @@
 model Document {
+  huAccessRule HuDocumentAccess?
+  huRoomSelections HuRoomDocument[]
+  huDiscussions HuRoomDiscussion[]
+  huReadings HuPageReading[]
   id                   String              @id @default(cuid())
   name                 String
   description          String?
@@ -36,6 +40,7 @@ model Document {
   uploadedDocument DocumentUpload[]
   isExternalUpload Boolean          @default(false) // Indicates if the document is an external upload
 
+  @@unique([id, teamId])
   @@index([ownerId])
   @@index([teamId])
   @@index([folderId])
@@ -45,6 +50,9 @@ model Document {
 }
 
 model DocumentVersion {
+  huDiscussions HuRoomDiscussion[]
+  huReadings HuPageReading[]
+  huS3VersionId String?
   id                String              @id @default(cuid())
   versionNumber     Int // e.g., 1, 2, 3 for version control
   document          Document            @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -67,6 +75,7 @@ model DocumentVersion {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
+  @@unique([id, documentId])
   @@unique([versionNumber, documentId])
   @@index([documentId])
   @@index([documentId, isPrimary]) // Performance optimization for primary version queries

@@ -1,0 +1,208 @@
+// HorseUp investor-room implementation, AGPL-3.0-only.
+// These models are independent of the enterprise data-room implementation.
+
+model HuRoomStage {
+  id        String   @id @default(cuid())
+  teamId    String
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  rooms         HuInvestorRoom[]
+  documentRules HuDocumentAccess[]
+
+  @@unique([id, teamId])
+  @@unique([teamId, position])
+}
+
+model HuDocumentAccess {
+  documentId     String @id
+  teamId         String
+  minimumStageId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  document       Document @relation(fields: [documentId, teamId], references: [id, teamId], onDelete: Cascade)
+  minimumStage   HuRoomStage @relation(fields: [minimumStageId, teamId], references: [id, teamId], onDelete: Restrict)
+
+  @@unique([documentId, teamId])
+  @@index([minimumStageId, teamId])
+  @@index([teamId])
+}
+
+model HuInvestorRoom {
+  id         String @id @default(cuid())
+  teamId     String
+  name       String
+  stageId    String
+  archivedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  team       Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  stage      HuRoomStage @relation(fields: [stageId, teamId], references: [id, teamId], onDelete: Restrict)
+
+  documents   HuRoomDocument[]
+  memberships HuRoomMembership[]
+  discussions HuRoomDiscussion[]
+  visits      HuRoomVisit[]
+
+  @@unique([id, teamId])
+  @@index([teamId, archivedAt, createdAt])
+  @@index([stageId, teamId])
+}
+
+model HuRoomDocument {
+  roomId     String
+  documentId String
+  teamId     String
+  addedAt    DateTime @default(now())
+  room       HuInvestorRoom @relation(fields: [roomId, teamId], references: [id, teamId], onDelete: Cascade)
+  document   Document @relation(fields: [documentId, teamId], references: [id, teamId], onDelete: Cascade)
+
+  @@id([roomId, documentId])
+  @@index([documentId, teamId])
+  @@index([roomId, teamId])
+}
+
+model HuRoomMembership {
+  id          String @id @default(cuid())
+  roomId      String
+  // Store normalized lowercase email; the migration enforces normalization.
+  email       String
+  userId      String?
+  invitedById String
+  invitedAt   DateTime @default(now())
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  updatedAt   DateTime @updatedAt
+  room        HuInvestorRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user        User? @relation("HuRoomMember", fields: [userId], references: [id], onDelete: Restrict)
+  invitedBy   User @relation("HuRoomInviter", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@unique([roomId, email])
+  @@unique([roomId, userId])
+  @@index([userId])
+  @@index([invitedById])
+  @@index([email, revokedAt])
+}
+
+model HuRoomDiscussion {
+  id                String @id @default(cuid())
+  roomId            String
+  teamId            String
+  title             String
+  documentId        String?
+  documentVersionId String?
+  pageNumber        Int?
+  createdById       String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  resolvedAt        DateTime?
+  resolvedById      String?
+  room              HuInvestorRoom @relation(fields: [roomId, teamId], references: [id, teamId], onDelete: Cascade)
+  document          Document? @relation(fields: [documentId, teamId], references: [id, teamId], onDelete: Restrict)
+  documentVersion   DocumentVersion? @relation(fields: [documentVersionId, documentId], references: [id, documentId], onDelete: Restrict)
+  createdBy         User @relation("HuDiscussionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  resolvedBy        User? @relation("HuDiscussionResolver", fields: [resolvedById], references: [id], onDelete: Restrict)
+  messages          HuRoomMessage[]
+  events            HuRoomDiscussionEvent[]
+
+  @@unique([id, roomId])
+  @@index([roomId, resolvedAt, createdAt, id])
+  @@index([roomId, teamId])
+  @@index([documentId, teamId])
+  @@index([documentVersionId, documentId])
+  @@index([createdById])
+  @@index([resolvedById])
+}
+
+model HuRoomMessage {
+  id           String @id @default(cuid())
+  discussionId String
+  roomId       String
+  authorId     String
+  body         String
+  // Database-generated tie-breaker for stable ordering under concurrent writes.
+  sequence     BigInt @unique @default(autoincrement())
+  createdAt    DateTime @default(now())
+  editedAt     DateTime?
+  discussion   HuRoomDiscussion @relation(fields: [discussionId, roomId], references: [id, roomId], onDelete: Cascade)
+  author       User @relation("HuMessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  mentions     HuRoomMention[]
+
+  @@unique([id, roomId])
+  @@index([discussionId, createdAt, sequence])
+  @@index([discussionId, roomId])
+  @@index([authorId])
+}
+
+model HuRoomMention {
+  messageId String
+  roomId    String
+  userId    String
+  createdAt DateTime @default(now())
+  message   HuRoomMessage @relation(fields: [messageId, roomId], references: [id, roomId], onDelete: Cascade)
+  user      User @relation("HuMentionRecipient", fields: [userId], references: [id], onDelete: Restrict)
+
+  // Current room/document access must be checked when creating and notifying.
+  @@id([messageId, userId])
+  @@index([userId, createdAt])
+  @@index([messageId, roomId])
+}
+
+enum HuDiscussionEventType {
+  RESOLVED
+  REOPENED
+}
+
+model HuRoomDiscussionEvent {
+  id           String @id @default(cuid())
+  discussionId String
+  roomId       String
+  actorId      String
+  type         HuDiscussionEventType
+  sequence     BigInt @unique @default(autoincrement())
+  createdAt    DateTime @default(now())
+  discussion   HuRoomDiscussion @relation(fields: [discussionId, roomId], references: [id, roomId], onDelete: Cascade)
+  actor        User @relation("HuDiscussionActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([discussionId, createdAt, sequence])
+  @@index([discussionId, roomId])
+  @@index([actorId])
+}
+
+model HuRoomVisit {
+  id         String @id @default(cuid())
+  roomId     String
+  teamId     String
+  userId     String
+  startedAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  room       HuInvestorRoom @relation(fields: [roomId, teamId], references: [id, teamId], onDelete: Cascade)
+  user       User @relation("HuRoomVisitor", fields: [userId], references: [id], onDelete: Restrict)
+  readings   HuPageReading[]
+
+  @@unique([id, teamId])
+  @@index([roomId, startedAt])
+  @@index([roomId, teamId])
+  @@index([userId])
+}
+
+model HuPageReading {
+  visitId           String
+  teamId            String
+  documentId        String
+  documentVersionId String
+  pageNumber        Int
+  visibleMs         Int @default(0)
+  updatedAt         DateTime @updatedAt
+  visit             HuRoomVisit @relation(fields: [visitId, teamId], references: [id, teamId], onDelete: Cascade)
+  document          Document @relation(fields: [documentId, teamId], references: [id, teamId], onDelete: Restrict)
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, documentId], references: [id, documentId], onDelete: Restrict)
+
+  @@id([visitId, documentVersionId, pageNumber])
+  @@index([visitId, teamId])
+  @@index([documentId, teamId])
+  @@index([documentVersionId, documentId])
+}

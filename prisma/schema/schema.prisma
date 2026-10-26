@@ -38,6 +38,14 @@ model Session {
 }
 
 model User {
+  huRoomMemberships HuRoomMembership[] @relation("HuRoomMember")
+  huRoomInvitations HuRoomMembership[] @relation("HuRoomInviter")
+  huCreatedDiscussions HuRoomDiscussion[] @relation("HuDiscussionCreator")
+  huResolvedDiscussions HuRoomDiscussion[] @relation("HuDiscussionResolver")
+  huRoomMessages HuRoomMessage[] @relation("HuMessageAuthor")
+  huRoomMentions HuRoomMention[] @relation("HuMentionRecipient")
+  huDiscussionEvents HuRoomDiscussionEvent[] @relation("HuDiscussionActor")
+  huRoomVisits HuRoomVisit[] @relation("HuRoomVisitor")
   id             String     @id @default(cuid())
   name           String?
   email          String?    @unique

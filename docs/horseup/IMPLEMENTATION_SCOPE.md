@@ -64,6 +64,10 @@ Status: AWS host and S3 provisioned; application implementation and deployment p
 
 ## Validation status
 
-The independent investor access policy is implemented in lib/horseup/rooms/access-policy.ts. Eight unit tests pass for access rules; no database/API/UI integration has been implemented or tested. No investor invitations have been sent. Docker, SSM, SSH and Coolify reachability/usable status were checked successfully; proxy and sentinel containers are running. CPU and S3 storage alarms are connected to the confirmed administrator email subscription. Further monitoring work is deferred at the user request.
+The independent investor access policy is implemented in lib/horseup/rooms/access-policy.ts. Eight unit tests pass for access rules. The approved dedicated self-hosted entrypoint now contains server-side room operations, email-link authentication configuration, PDF streaming and publication, discussion history, mentions and visit/page reporting. Six database integration tests pass against disposable local PostgreSQL, along with the SQL constraint suite. They cover acceptance, stage enforcement, room isolation, discussion references/history, analytics and revocation. TypeScript checking passes. Browser flows, actual email/S3 transfers and deployment are not yet verified. No investor invitations have been sent.
+
+The user approved the dedicated HorseUp entrypoint inside the fork, excluding upstream enterprise/SaaS routes from the build. Dependency auditing found security advisories in inherited packages; approval for patched framework/authentication/PDF versions is pending. No production app deployment should occur before these fixes and verification.
+
+Docker, SSM, SSH and Coolify reachability/usable status were checked successfully; proxy and sentinel containers are running. CPU and S3 storage alarms are connected to the confirmed administrator email subscription. Further monitoring work is deferred at the user request.
 
 Production deployment must use horseup/hu-papermark, with a verified commit from the implementation branch. No Coolify application or pinned deploy commit exists yet.
