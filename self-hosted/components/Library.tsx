@@ -23,15 +23,34 @@ export default function Library({ data, refresh }: { data: Workspace; refresh: (
       <label>PDF file<input type="file" name="file" accept="application/pdf,.pdf" required /></label><button disabled={busy || !data.stages.length}>{busy ? 'Publishing…' : 'Upload and publish'}</button>
     </form></details>
     {message && <p role="status">{message}</p>}{error && <p role="alert" className="error">{error}</p>}
-    {data.library.map(d => <div className="room-row" key={d.id}><span><strong>{d.name}</strong><small>{d.versions[0] ? `Published version ${d.versions[0].versionNumber}` : 'Unpublished'}</small></span>
-      <label className="compact">Minimum stage<select aria-label={`Minimum stage for ${d.name}`} value={d.huAccessRule?.minimumStageId || ''} disabled={busy} onChange={async e => { setBusy(true); setError(''); try { await action('setDocumentStage', { documentId: d.id, stageId: e.target.value }); await refresh(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }}><option value="" disabled>Select a stage</option>{data.stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-      <button type="button" className="quiet danger" disabled={busy} onClick={async () => {
-        const rooms = d._count?.huRoomSelections ?? 0;
-        if (!window.confirm(`Delete "${d.name}"? It is removed from the library and from ${rooms} room(s) immediately. Existing discussions stay, without access to the document.`)) return;
-        setBusy(true); setError(''); setMessage('');
-        try { await action('deleteDocument', { documentId: d.id }); await refresh(); setMessage(`"${d.name}" was deleted and removed from ${rooms} room(s).`); }
-        catch (err) { setError((err as Error).message); } finally { setBusy(false); }
-      }}>Delete</button>
-    </div>)}
+    {data.library.length > 0 && <div className="library-table" role="table" aria-label="Document library">
+      <div className="library-head" role="row"><span role="columnheader">Document</span><span role="columnheader">Last updated</span><span role="columnheader">Minimum stage</span><span role="columnheader">Rooms</span><span role="columnheader"><span className="visually-hidden">Actions</span></span></div>
+      {data.library.map(d => {
+        const version = d.versions[0];
+        const position = (stageId?: string | null) => data.stages.find(s => s.id === stageId)?.position ?? -1;
+        const required = position(d.huAccessRule?.minimumStageId);
+        const rooms = (d.huRoomSelections ?? []).map(r => r.room);
+        const active = rooms.filter(r => !r.archivedAt);
+        const visible = active.filter(r => required >= 0 && position(r.stageId) >= required);
+        return <div className="library-row" role="row" key={d.id}>
+          <span role="cell" data-label="Document"><strong>{d.name}</strong><small>{version ? `Version ${version.versionNumber}${version.numPages ? ` · ${version.numPages} page${version.numPages === 1 ? '' : 's'}` : ''}` : 'Unpublished'}</small></span>
+          <span role="cell" data-label="Last updated">{version?.createdAt ? <time dateTime={version.createdAt}>{new Date(version.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time> : '–'}</span>
+          <span role="cell" data-label="Minimum stage"><select aria-label={`Minimum stage for ${d.name}`} value={d.huAccessRule?.minimumStageId || ''} disabled={busy} onChange={async e => { setBusy(true); setError(''); try { await action('setDocumentStage', { documentId: d.id, stageId: e.target.value }); await refresh(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }}><option value="" disabled>Select a stage</option>{data.stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></span>
+          <span role="cell" data-label="Rooms">{rooms.length ? <details className="room-summary"><summary>{active.length} room{active.length === 1 ? '' : 's'} · {visible.length} can view{rooms.length > active.length ? ` · ${rooms.length - active.length} archived` : ''}</summary><ul>{rooms.map(r => {
+            const state = r.archivedAt ? 'Archived' : visible.includes(r) ? 'Can view' : `Locked until ${d.huAccessRule ? data.stages.find(s => s.id === d.huAccessRule!.minimumStageId)?.name : 'a stage is set'}`;
+            return <li key={r.id}><a href={`/rooms/${r.id}`}>{r.name}</a><small>{state}</small></li>;
+          })}</ul></details> : <small>Not in any room</small>}</span>
+          <span role="cell" className="library-actions">
+            {version && <a className="button quiet" href={`/api/pdf?documentId=${encodeURIComponent(d.id)}&versionId=${encodeURIComponent(version.id)}`} target="_blank" rel="noopener">View</a>}
+            <button type="button" className="quiet danger" disabled={busy} onClick={async () => {
+              if (!window.confirm(`Delete "${d.name}"? It is removed from the library and from ${rooms.length} room(s) immediately. Existing discussions stay, without access to the document.`)) return;
+              setBusy(true); setError(''); setMessage('');
+              try { await action('deleteDocument', { documentId: d.id }); await refresh(); setMessage(`"${d.name}" was deleted and removed from ${rooms.length} room(s).`); }
+              catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+            }}>Delete</button>
+          </span>
+        </div>;
+      })}
+    </div>}
   </section>;
 }
