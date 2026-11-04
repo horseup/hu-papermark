@@ -251,6 +251,10 @@ test('document changes are debounced into one email per investor and skip everyo
   const membership = await db.huRoomMembership.findFirstOrThrow({ where: { roomId: nRoom.id, userId: inv1.id } });
   assert.equal(message.headers['List-Unsubscribe'], `<http://localhost:3000/unsubscribe?m=${membership.id}&t=${signature(membership.id)}>`);
   assert.doesNotMatch(message.text, /Synthetic Data Pack/);
+  // Multipart: the HTML part carries the same content, the room as the button and the opt-out link.
+  assert.ok(message.html.includes(`<a href="http://localhost:3000/rooms/${nRoom.id}" style="display: inline-block; background-color: #027C81;`));
+  assert.ok(message.html.includes('<li style="margin: 0 0 4px;">Synthetic Deck</li>'));
+  assert.ok(message.html.includes(`href="http://localhost:3000/unsubscribe?m=${membership.id}&amp;t=${signature(membership.id)}"`));
   sent.length = 0;
 });
 

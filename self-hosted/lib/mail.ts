@@ -1,8 +1,9 @@
 import { Resend } from 'resend';
 import { appUrl } from './config';
+import { invitationEmail } from './emails';
 
-export type MailOptions = { fromName?: string; replyTo?: string; headers?: Record<string, string> };
-export type MailTransport = (message: { from: string; to: string; subject: string; text: string; replyTo?: string; headers?: Record<string, string> }) => Promise<void>;
+export type MailOptions = { html?: string; fromName?: string; replyTo?: string; headers?: Record<string, string> };
+export type MailTransport = (message: { from: string; to: string; subject: string; text: string; html?: string; replyTo?: string; headers?: Record<string, string> }) => Promise<void>;
 
 async function resendTransport(message: Parameters<MailTransport>[0]) {
   const key = process.env.RESEND_API_KEY;
@@ -24,9 +25,10 @@ export async function sendMail(to: string, subject: string, text: string, option
   const configured = process.env.HORSEUP_EMAIL_FROM;
   if (!configured) throw new Error('Email delivery is not configured');
   const from = options.fromName ? senderWithName(configured, options.fromName) : configured;
-  await transport({ from, to, subject, text, ...(options.replyTo ? { replyTo: options.replyTo } : {}), ...(options.headers ? { headers: options.headers } : {}) });
+  await transport({ from, to, subject, text, ...(options.html ? { html: options.html } : {}), ...(options.replyTo ? { replyTo: options.replyTo } : {}), ...(options.headers ? { headers: options.headers } : {}) });
 }
 
 export async function sendRoomInvite(email: string, roomName: string, roomId: string) {
-  await sendMail(email, `Your invitation to ${roomName}`, `You have been invited to ${roomName} in the HorseUp deal room.\n\nOpen ${appUrl()}/rooms/${encodeURIComponent(roomId)} and sign in with this email address.\n\nThis invitation is personal. Access can be revoked by the room administrators.`);
+  const mail = invitationEmail(roomName, `${appUrl()}/rooms/${encodeURIComponent(roomId)}`);
+  await sendMail(email, mail.subject, mail.text, { html: mail.html });
 }
