@@ -1,6 +1,8 @@
 import type { Workspace, Room, LibraryDocument } from './client';
 export type Person = { id: string; name?: string | null; email: string | null };
-export type Discussion = { id: string; title: string; documentId: string | null; documentVersionId: string | null; pageNumber: number | null; documentRemoved: boolean; createdById: string; resolvedAt: string | null;
+export type AnchorRect = { x: number; y: number; w: number; h: number };
+export type Anchor = { kind: 'text' | 'area'; rects: AnchorRect[]; quote?: string };
+export type Discussion = { id: string; title: string; documentId: string | null; documentVersionId: string | null; pageNumber: number | null; anchor: Anchor | null; createdAt: string; documentRemoved: boolean; createdById: string; resolvedAt: string | null;
   messages: { id: string; body: string; createdAt: string; author: Person; mentions: { userId: string }[] }[];
   events: { type: string; createdAt: string; actor: Person }[] };
 export type RoomData = Workspace & { room: Room & { selectedDocumentIds: string[] }; documents: LibraryDocument[]; discussions: Discussion[];
