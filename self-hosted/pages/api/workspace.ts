@@ -19,7 +19,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const library = actor.admin ? await db.document.findMany({ where: { teamId, huDeletedAt: null }, select: {
       id: true, name: true, updatedAt: true, huAccessRule: { select: { minimumStageId: true } },
       _count: { select: { huRoomSelections: true } },
-      versions: { where: { isPrimary: true }, select: { id: true, versionNumber: true, fileSize: true, numPages: true } },
+      huRoomSelections: { select: { room: { select: { id: true, name: true, stageId: true, archivedAt: true } } }, orderBy: { addedAt: 'asc' } },
+      versions: { where: { isPrimary: true }, select: { id: true, versionNumber: true, fileSize: true, numPages: true, createdAt: true } },
     }, orderBy: { updatedAt: 'desc' } }) : [];
 
     const roomId = typeof req.query.roomId === 'string' ? req.query.roomId : null;
