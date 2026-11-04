@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const ids = visible.map(d => d.id);
     const discussions = await db.huRoomDiscussion.findMany({
       where: { roomId, OR: [{ documentId: null }, { documentId: { in: ids } }, { document: { huDeletedAt: { not: null } } }] },
-      select: { id: true, title: true, documentId: true, documentVersionId: true, pageNumber: true,
+      select: { id: true, title: true, documentId: true, documentVersionId: true, pageNumber: true, anchor: true,
         document: { select: { huDeletedAt: true } },
         createdAt: true, resolvedAt: true, createdById: true,
         messages: { orderBy: [{ createdAt: 'asc' }, { sequence: 'asc' }], select: {

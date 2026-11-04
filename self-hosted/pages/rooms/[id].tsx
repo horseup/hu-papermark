@@ -4,7 +4,9 @@ import { useSession } from 'next-auth/react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { action, request } from '../../lib/client';
-import type { RoomData } from '../../lib/room-types';
+import type { Anchor, Discussion, RoomData } from '../../lib/room-types';
+import { CommentBubble, InlineComposer, InlineThread } from '../../components/InlineComments';
+import { anchorPoint, type Point } from '../../lib/anchor';
 import { Shell } from '../../components/Shell';
 import { RoomSettings } from '../../components/RoomSettings';
 import { Discussions } from '../../components/Discussions';
@@ -14,6 +16,26 @@ export default function InvestorRoom() {
   const [data, setData] = useState<RoomData>(); const [error, setError] = useState(''); const [visitId, setVisitId] = useState<string>();
   const [selection, setSelection] = useState<{ documentId: string; versionId: string; page: number; historical?: boolean } | null>(null);
   const [tab, setTab] = useState('documents'); const started = useRef('');
+  // Inline comment UI state, bound to the page it was opened on.
+  const [inline, setInline] = useState<{ key: string; at: Point } & ({ kind: 'bubble' | 'composer'; anchor: Anchor } | { kind: 'thread'; id: string }) | null>(null);
+  const pageKey = selection ? `${selection.documentId}:${selection.versionId}:${selection.page}` : '';
+  const numbers = new Map<string, number>(); const pageThreads: Discussion[] = [];
+  if (data) {
+    const groups = new Map<string, Discussion[]>();
+    for (const d of [...data.discussions].filter(d => d.anchor && d.documentId && !d.documentRemoved).sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+      const key = `${d.documentId}:${d.documentVersionId}:${d.pageNumber}`; groups.set(key, [...(groups.get(key) || []), d]);
+    }
+    for (const [key, list] of groups) list.forEach((d, i) => { numbers.set(d.id, i + 1); if (key === pageKey) pageThreads.push(d); });
+  }
+  const openInline = (discussion: Discussion) => {
+    if (!discussion.documentId || !discussion.documentVersionId || !discussion.anchor || !data) return;
+    const latest = data.documents.find(d => d.id === discussion.documentId)?.versions[0]?.id;
+    setSelection({ documentId: discussion.documentId, versionId: discussion.documentVersionId, page: discussion.pageNumber || 1, historical: latest !== discussion.documentVersionId });
+    setInline({ key: `${discussion.documentId}:${discussion.documentVersionId}:${discussion.pageNumber || 1}`, kind: 'thread', id: discussion.id, at: anchorPoint(discussion.anchor.rects) });
+    setTab('viewer');
+  };
+  const current = inline && inline.key === pageKey ? inline : null;
+  const openThread = current?.kind === 'thread' ? data?.discussions.find(d => d.id === current.id) : undefined;
   const refresh = useCallback(async () => { const result = await request<RoomData>(`/api/workspace?roomId=${encodeURIComponent(id)}`); setData(result); setError(''); }, [id]);
   useEffect(() => {
     if (!id) return;
@@ -39,8 +61,16 @@ export default function InvestorRoom() {
       <nav className="mobile-tabs" aria-label="Room sections">{['documents', 'viewer', 'discussions'].map(name => <button key={name} className={tab === name ? '' : 'quiet'} aria-pressed={tab === name} onClick={() => setTab(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}</nav>
       <div className={`room-grid show-${tab}`}><nav className="documents" aria-label="Room documents"><h2>Documents</h2>{data.documents.map(d => <button className={selection?.documentId === d.id ? 'selected document-link' : 'quiet document-link'} key={d.id} onClick={() => { setSelection({ documentId: d.id, versionId: d.versions[0].id, page: 1 }); setTab('viewer'); }}>{d.name}<small>Version {d.versions[0].versionNumber}</small></button>)}{!data.documents.length && <p>No documents are available at this stage yet.</p>}</nav>
       <section className="viewer"><h2>{data.documents.find(d => d.id === selection?.documentId)?.name || 'Document preview'}</h2>{selection?.historical && <p className="historical">Showing the version referenced by this discussion. Select the document from the list to return to the latest version.</p>}
-      {selection ? <PdfViewer key={`${selection.documentId}:${selection.versionId}`} {...selection} roomId={id} visitId={visitId} onPage={page => setSelection(current => current && { ...current, page })} /> : <p className="empty">Select a document to start reading.</p>}</section>
-      <Discussions data={data} reference={selection} refresh={refresh} openReference={discussion => { if (discussion.documentId && discussion.documentVersionId) { setSelection({ documentId: discussion.documentId, versionId: discussion.documentVersionId, page: discussion.pageNumber || 1, historical: true }); setTab('viewer'); } }} />
+      {selection ? <PdfViewer key={`${selection.documentId}:${selection.versionId}`} {...selection} roomId={id} visitId={visitId} onPage={page => setSelection(value => value && { ...value, page })}
+        highlights={pageThreads.filter(d => !d.resolvedAt || openThread?.id === d.id).map(d => ({ id: d.id, number: numbers.get(d.id) || 0, rects: d.anchor!.rects, active: openThread?.id === d.id }))}
+        onAnchor={data.room.archivedAt ? undefined : (anchor, at) => setInline({ key: pageKey, kind: 'bubble', anchor, at })}
+        onHighlight={(threadId, at) => setInline({ key: pageKey, kind: 'thread', id: threadId, at })}
+        onPageClick={() => { if (current?.kind !== 'composer') setInline(null); }}
+        overlay={current?.kind === 'bubble' ? <CommentBubble at={current.at} onComment={() => setInline({ ...current, kind: 'composer' })} />
+          : current?.kind === 'composer' ? <InlineComposer data={data} anchor={current.anchor} reference={selection} at={current.at} refresh={refresh} onCancel={() => { setInline(null); window.getSelection()?.removeAllRanges(); }} onDone={threadId => { window.getSelection()?.removeAllRanges(); setInline({ key: pageKey, kind: 'thread', id: threadId, at: current.at }); }} />
+          : openThread ? <InlineThread data={data} discussion={openThread} number={numbers.get(openThread.id) || 0} at={current!.at} refresh={refresh} onClose={() => setInline(null)} /> : null} />
+        : <p className="empty">Select a document to start reading.</p>}</section>
+      <Discussions data={data} reference={selection} refresh={refresh} numbers={numbers} openInline={openInline} openReference={discussion => { if (discussion.documentId && discussion.documentVersionId) { setSelection({ documentId: discussion.documentId, versionId: discussion.documentVersionId, page: discussion.pageNumber || 1, historical: true }); setTab('viewer'); } }} />
     </div></>}
   </div></Shell>;
 }

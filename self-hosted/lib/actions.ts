@@ -13,6 +13,14 @@ const id = z.string().min(1).max(150);
 const title = z.string().trim().min(1).max(300);
 const email = z.string().trim().toLowerCase().email().max(254);
 const ids = z.array(id).max(1000).transform(value => [...new Set(value)]);
+const fraction = z.number().finite().min(0).max(1);
+// Inline comment position, as fractions of the rendered page so it survives any zoom level.
+const anchorSchema = z.object({
+  kind: z.enum(['text', 'area']),
+  rects: z.array(z.object({ x: fraction, y: fraction, w: fraction, h: fraction })
+    .refine(r => r.w > 0 && r.h > 0 && r.x + r.w <= 1.0001 && r.y + r.h <= 1.0001, 'Highlight outside the page.')).min(1).max(60),
+  quote: z.string().trim().max(1000).optional(),
+}).strict();
 type Notice = { kind: 'invite'; email: string; roomId: string; roomName: string } |
   { kind: 'mention'; userId: string; roomId: string; documentId: string | null };
 type Outcome = { value: unknown; notices?: Notice[] };
@@ -159,7 +167,8 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
     }
     case 'createDiscussion': {
       const data = z.object({ roomId: id, title, body: z.string().trim().min(1).max(20000), documentId: id.nullable(),
-        versionId: id.nullable(), pageNumber: z.number().int().min(1).nullable(), mentionIds: ids.default([]), requestId: z.string().uuid() }).parse(input);
+        versionId: id.nullable(), pageNumber: z.number().int().min(1).nullable(), anchor: anchorSchema.nullable().default(null), mentionIds: ids.default([]), requestId: z.string().uuid() }).parse(input);
+      if (data.anchor && (!data.documentId || !data.pageNumber)) throw new HttpError(400, 'A highlight needs a document page.');
       await roomContext(tx, actor, data.roomId);
       if (data.documentId) {
         await documentAccess(tx, actor, data.roomId, data.documentId);
@@ -174,6 +183,7 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       }
       const discussion = await tx.huRoomDiscussion.create({ data: { id: data.requestId, roomId: data.roomId, teamId, title: data.title,
         documentId: data.documentId, documentVersionId: data.versionId, pageNumber: data.pageNumber, createdById: actor.id,
+        anchor: data.anchor ?? Prisma.DbNull,
       } });
       const message = await tx.huRoomMessage.create({ data: { roomId: data.roomId, discussionId: discussion.id, authorId: actor.id, body: data.body } });
       await tx.huRoomMention.createMany({ data: data.mentionIds.map(userId => ({ messageId: message.id, roomId: data.roomId, userId })) });

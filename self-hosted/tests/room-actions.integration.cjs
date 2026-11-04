@@ -92,6 +92,29 @@ test('threads preserve version context, enforce room isolation and record resolv
   await act(admin, 'setRoomDocuments', { roomId: room.id, documentIds: [doc.id] });
 });
 
+test('inline comments store a validated page anchor and reject malformed ones', async () => {
+  const base = { roomId: room.id, title: 'Inline', body: 'Question on a passage', documentId: doc.id, versionId: version.id, pageNumber: 2 };
+  const anchor = { kind: 'text', rects: [{ x: 0.1, y: 0.2, w: 0.5, h: 0.03 }, { x: 0.1, y: 0.24, w: 0.3, h: 0.03 }], quote: 'Synthetic passage' };
+  const created = await act(investor, 'createDiscussion', { ...base, anchor, requestId: randomUUID() });
+  const saved = await db.huRoomDiscussion.findUniqueOrThrow({ where: { id: created.id } });
+  assert.deepEqual(saved.anchor, anchor);
+  assert.equal(saved.pageNumber, 2);
+  const area = await act(investor, 'createDiscussion', { ...base, anchor: { kind: 'area', rects: [{ x: 0, y: 0, w: 1, h: 1 }] }, requestId: randomUUID() });
+  assert.equal((await db.huRoomDiscussion.findUniqueOrThrow({ where: { id: area.id } })).anchor.kind, 'area');
+  const bad = async (values, status = 400) => {
+    await assert.rejects(act(investor, 'createDiscussion', { ...base, requestId: randomUUID(), ...values }), error => error.status === status || error.name === 'ZodError');
+  };
+  await bad({ pageNumber: null, anchor });
+  await bad({ documentId: null, versionId: null, pageNumber: null, anchor });
+  await bad({ anchor: { kind: 'text', rects: [{ x: 0.9, y: 0.1, w: 0.5, h: 0.1 }] } });
+  await bad({ anchor: { kind: 'text', rects: [{ x: -0.1, y: 0.1, w: 0.2, h: 0.1 }] } });
+  await bad({ anchor: { kind: 'text', rects: [] } });
+  await bad({ anchor: { kind: 'note', rects: [{ x: 0, y: 0, w: 0.1, h: 0.1 }] } });
+  await bad({ anchor: { kind: 'text', rects: [{ x: 0, y: 0, w: 0.1, h: 0.1 }], html: '<b>x</b>' } });
+  const plain = await act(investor, 'createDiscussion', { roomId: room.id, title: 'General', body: 'Room-level question', documentId: null, versionId: null, pageNumber: null, requestId: randomUUID() });
+  assert.equal((await db.huRoomDiscussion.findUniqueOrThrow({ where: { id: plain.id } })).anchor, null);
+});
+
 test('analytics reject spoofed sessions and draft pages; repeated reports do not inflate time', async () => {
   const visitId = randomUUID();
   await act(investor, 'startVisit', { roomId: room.id, visitId });

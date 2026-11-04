@@ -95,6 +95,8 @@ model HuRoomDiscussion {
   documentId        String?
   documentVersionId String?
   pageNumber        Int?
+  // Inline comment position on the page: { kind, rects: [{ x, y, w, h }] as 0..1 fractions, quote? }.
+  anchor            Json?
   createdById       String
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
