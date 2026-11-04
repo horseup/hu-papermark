@@ -4,6 +4,7 @@ import { type Actor, type Database, documentAccess, threadAccess } from './acces
 import { adminEmails, appUrl, investorReplyTo, NOTIFICATION_SENDER_NAME, notificationMaxWaitMs, notificationQuietMs, teamId } from './config';
 import { db } from './db';
 import { sendMail } from './mail';
+import { adminActivityEmail, investorUpdateEmail, type AdminRoomActivity, type InvestorRoomUpdate } from './emails';
 
 // Notification outbox. Changes write rows inside their own transaction; the
 // flusher sends one debounced email per recipient and re-checks access first.
@@ -118,7 +119,7 @@ const CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const INVESTOR_KINDS: HuNotificationKind[] = ['DOCUMENT_AVAILABLE', 'DOCUMENT_UPDATED', 'THREAD_REPLY', 'MENTION'];
 type Recipient = { email: string; admin: boolean; user: { id: string; emailVerified: Date | null } | null };
-type Delivery = { subject: string; text: string; headers?: Record<string, string>; replyTo?: string };
+type Delivery = { subject: string; text: string; html: string; headers?: Record<string, string>; replyTo?: string };
 
 async function stillRelevant(row: HuNotification, recipient: Recipient): Promise<boolean> {
   if (recipient.user && row.actorId === recipient.user.id) return false;
@@ -174,68 +175,52 @@ function byRoom(rows: HuNotification[]) {
 
 async function investorEmail(rows: HuNotification[], recipient: Recipient): Promise<Delivery> {
   const names = await describe(rows);
-  const sections: string[] = []; const optOuts: { room: string; url: string }[] = [];
-  const updateRooms: string[] = []; const endedRooms: string[] = [];
+  const rooms: InvestorRoomUpdate[] = [];
   for (const [roomId, items] of byRoom(rows)) {
     const room = names.room(roomId);
-    if (items.some(i => i.kind === 'ACCESS_ENDED')) {
-      endedRooms.push(room);
-      sections.push(`Your access to "${room}" has ended. If you have questions, reply to this email.`);
-      continue;
-    }
-    updateRooms.push(room);
+    if (items.some(i => i.kind === 'ACCESS_ENDED')) { rooms.push({ kind: 'ended', name: room }); continue; }
     const added = [...new Set(items.filter(i => i.kind === 'DOCUMENT_AVAILABLE').map(i => i.documentId ?? ''))];
     const updated = [...new Set(items.filter(i => i.kind === 'DOCUMENT_UPDATED' && !added.includes(i.documentId ?? '')).map(i => i.documentId ?? ''))];
-    const lines = [`"${room}"`];
-    if (added.length) lines.push('', 'New documents available:', ...added.map(id => `- ${names.document(id)?.name ?? 'Document'}`));
-    if (updated.length) lines.push('', 'Updated documents:', ...updated.map(id => { const doc = names.document(id); return `- ${doc?.name ?? 'Document'}${doc?.versions[0] ? ` (version ${doc.versions[0].versionNumber})` : ''}`; }));
     const threads = new Map<string, HuNotification[]>();
     for (const item of items) if (item.discussionId) threads.set(item.discussionId, [...(threads.get(item.discussionId) ?? []), item]);
-    if (threads.size) lines.push('', 'Discussions:', ...[...threads].map(([discussionId, entries]) => {
-      const replies = entries.filter(e => e.kind === 'THREAD_REPLY').length;
-      const mentioned = entries.some(e => e.kind === 'MENTION');
-      const what = mentioned ? 'You were mentioned in' : replies > 1 ? `${replies} new replies in` : 'New reply in';
-      return `- ${what} ${names.topic(discussionId)}`;
-    }));
-    lines.push('', `Open the room: ${appUrl()}/rooms/${encodeURIComponent(roomId)}`);
-    sections.push(lines.join('\n'));
     const membership = await db.huRoomMembership.findUnique({ where: { roomId_email: { roomId, email: recipient.email } }, select: { id: true } });
-    if (membership) optOuts.push({ room, url: unsubscribeUrl(membership.id) });
+    rooms.push({ kind: 'updates', name: room, url: `${appUrl()}/rooms/${encodeURIComponent(roomId)}`,
+      added: added.map(id => names.document(id)?.name ?? 'Document'),
+      updated: updated.map(id => { const doc = names.document(id); return `${doc?.name ?? 'Document'}${doc?.versions[0] ? ` (version ${doc.versions[0].versionNumber})` : ''}`; }),
+      discussions: [...threads].map(([discussionId, entries]) => {
+        const replies = entries.filter(e => e.kind === 'THREAD_REPLY').length;
+        const mentioned = entries.some(e => e.kind === 'MENTION');
+        const what = mentioned ? 'You were mentioned in' : replies > 1 ? `${replies} new replies in` : 'New reply in';
+        return `${what} ${names.topic(discussionId)}`;
+      }),
+      optOutUrl: membership ? unsubscribeUrl(membership.id) : undefined });
   }
-  const subject = updateRooms.length === 0
-    ? (endedRooms.length === 1 ? `Your access to ${endedRooms[0]} has ended` : 'Your access to HorseUp deal rooms has ended')
-    : (updateRooms.length === 1 && !endedRooms.length ? `Updates in ${updateRooms[0]}` : 'Updates in your HorseUp deal rooms');
-  const intro = updateRooms.length ? 'There are updates in your HorseUp deal room. Sign in with this email address to see them.' : 'An update about your HorseUp deal room access.';
-  const footer = optOuts.length ? ['', '--', 'You receive these emails because you were invited to the room above. Reply to this email to reach the HorseUp team.',
-    ...optOuts.map(o => `Stop notification emails for "${o.room}": ${o.url}`)] : [];
-  const headers = optOuts.length === 1 ? { 'List-Unsubscribe': `<${optOuts[0].url}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } : undefined;
-  return { subject, text: ['Hello,', '', intro, '', sections.join('\n\n'), ...footer].join('\n'), headers, replyTo: investorReplyTo() };
+  const optOuts = rooms.flatMap(r => r.kind === 'updates' && r.optOutUrl ? [r.optOutUrl] : []);
+  const headers = optOuts.length === 1 ? { 'List-Unsubscribe': `<${optOuts[0]}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } : undefined;
+  return { ...investorUpdateEmail(rooms), headers, replyTo: investorReplyTo() };
 }
 
 async function adminEmail(rows: HuNotification[]): Promise<Delivery> {
   const names = await describe(rows);
-  const sections: string[] = [];
+  const rooms: AdminRoomActivity[] = [];
   for (const [roomId, items] of byRoom(rows)) {
-    const lines = [names.room(roomId)];
+    const lines: string[] = [];
     const seen = new Set<string>();
     for (const item of items) {
       const who = names.actor(item.actorId);
-      if (item.kind === 'ADMIN_INVITE_ACCEPTED') lines.push(`- ${who} accepted the invitation`);
-      else if (item.kind === 'ADMIN_FIRST_VISIT') lines.push(`- ${who} opened the room for the first time`);
+      if (item.kind === 'ADMIN_INVITE_ACCEPTED') lines.push(`${who} accepted the invitation`);
+      else if (item.kind === 'ADMIN_FIRST_VISIT') lines.push(`${who} opened the room for the first time`);
       else if (item.discussionId && (item.kind === 'ADMIN_MESSAGE' || item.kind === 'MENTION' || item.kind === 'THREAD_REPLY')) {
         const key = `${item.discussionId}:${item.actorId}`;
         if (seen.has(key)) continue; seen.add(key);
         const count = items.filter(i => i.discussionId === item.discussionId && i.actorId === item.actorId && i.kind === 'ADMIN_MESSAGE').length;
         const mentioned = items.some(i => i.discussionId === item.discussionId && i.actorId === item.actorId && i.kind === 'MENTION');
-        lines.push(`- ${who} ${mentioned ? 'mentioned you in' : count > 1 ? `wrote ${count} messages in` : 'wrote in'} ${names.topic(item.discussionId)}`);
+        lines.push(`${who} ${mentioned ? 'mentioned you in' : count > 1 ? `wrote ${count} messages in` : 'wrote in'} ${names.topic(item.discussionId)}`);
       }
     }
-    lines.push(`Open: ${appUrl()}/rooms/${encodeURIComponent(roomId)}`);
-    sections.push(lines.join('\n'));
+    rooms.push({ name: names.room(roomId), url: `${appUrl()}/rooms/${encodeURIComponent(roomId)}`, lines });
   }
-  const rooms = [...byRoom(rows).keys()];
-  const subject = rooms.length === 1 ? `Deal room activity in ${names.room(rooms[0])}` : `Deal room activity in ${rooms.length} rooms`;
-  return { subject, text: ['Investor activity in the HorseUp deal room:', '', sections.join('\n\n')].join('\n') };
+  return adminActivityEmail(rooms);
 }
 
 async function deliver(email: string, rows: HuNotification[], now: Date) {
@@ -248,7 +233,7 @@ async function deliver(email: string, rows: HuNotification[], now: Date) {
   const ids = keep.map(r => r.id);
   try {
     const mail = recipient.admin ? await adminEmail(keep) : await investorEmail(keep, recipient);
-    await sendMail(email, mail.subject, mail.text, { fromName: NOTIFICATION_SENDER_NAME, replyTo: mail.replyTo, headers: mail.headers });
+    await sendMail(email, mail.subject, mail.text, { html: mail.html, fromName: NOTIFICATION_SENDER_NAME, replyTo: mail.replyTo, headers: mail.headers });
     await db.huNotification.updateMany({ where: { id: { in: ids } }, data: { processedAt: new Date(), outcome: 'sent', claimedAt: null } });
     return { sent: 1, skipped: drop.length, failed: 0 };
   } catch (error) {

@@ -4,6 +4,7 @@ import type { EmailConfig } from 'next-auth/providers/email';
 import { db } from './db';
 import { adminEmails, teamId } from './config';
 import { sendMail } from './mail';
+import { signInEmail } from './emails';
 import { notifyAdmins } from './notifications';
 
 async function invited(email: string) {
@@ -32,7 +33,8 @@ export const authOptions: NextAuthOptions = {
       const attempt = mailAttempts.get(email) ?? { count: 0, until: now + 60 * 60 * 1000 };
       if (attempt.count >= 5 || mailAttempts.size > 5000) return;
       mailAttempts.set(email, { ...attempt, count: attempt.count + 1 });
-      await sendMail(email, 'Sign in to HorseUp deal room', `Use this personal link to sign in:\n\n${url}\n\nIt expires in 15 minutes and can be used once. If you did not request it, you can ignore this email.`);
+      const mail = signInEmail(url);
+      await sendMail(email, mail.subject, mail.text, { html: mail.html });
     },
   } satisfies EmailConfig],
   callbacks: {

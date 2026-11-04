@@ -26,6 +26,9 @@ transport is replaced by an in-memory stub) or access S3.
 The SQL constraint suite is `../tests/integration/horseup-room-constraints.sql`.
 Run it using `psql -v ON_ERROR_STOP=1`; fixtures are rolled back.
 
+Email rendering tests (no database, no email) run with `npm run test:emails`.
+Set `EMAIL_PREVIEW_DIR` to also write every rendered email as HTML and text for review.
+
 The pure access-policy suite is
 `node --experimental-strip-types --test ../lib/horseup/rooms/access-policy.test.mjs`.
 

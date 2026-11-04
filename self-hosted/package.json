@@ -11,7 +11,8 @@
     "start": "next start",
     "prepare:prisma": "node scripts/prepare-prisma.mjs && prisma generate",
     "typecheck": "tsc --noEmit",
-    "test:policy": "node --experimental-strip-types --test ../lib/horseup/rooms/access-policy.test.mjs"
+    "test:policy": "node --experimental-strip-types --test ../lib/horseup/rooms/access-policy.test.mjs",
+    "test:emails": "node --test tests/emails.unit.cjs"
   },
   "prisma": {
     "schema": ".generated/prisma/schema"
