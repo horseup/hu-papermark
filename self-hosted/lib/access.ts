@@ -46,13 +46,22 @@ export async function roomContext(client: Database, actor: Actor, roomId: string
 
 export async function documentAccess(client: Database, actor: Actor, roomId: string, documentId: string) {
   const state = await roomContext(client, actor, roomId);
-  const document = await client.document.findFirst({ where: { id: documentId, teamId }, include: { huAccessRule: true } });
+  const document = await client.document.findFirst({ where: { id: documentId, teamId, huDeletedAt: null }, include: { huAccessRule: true } });
   if (!document) throw new HttpError(404, 'Document not found.');
   const selected = state.room.documents.find(d => d.documentId === documentId) ?? null;
   if (!actor.admin && !canReadRoomDocument(state.context, {
     id: document.id, teamId, minimumStageId: document.huAccessRule?.minimumStageId ?? null,
   }, selected)) throw new HttpError(404, 'Document not found.');
   return { ...state, document };
+}
+
+// A discussion about a deleted document stays readable as a room-level thread,
+// so room members keep the Q&A history without regaining document access.
+export async function threadAccess(client: Database, actor: Actor, roomId: string, documentId: string | null) {
+  if (!documentId) return roomContext(client, actor, roomId);
+  const deleted = await client.document.findFirst({ where: { id: documentId, teamId, huDeletedAt: { not: null } }, select: { id: true } });
+  if (deleted) return roomContext(client, actor, roomId);
+  return documentAccess(client, actor, roomId, documentId);
 }
 
 export function sendError(res: NextApiResponse, error: unknown) {

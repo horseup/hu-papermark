@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { PutObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { type Actor, type Database, HttpError, requireAdmin, roomContext, documentAccess } from './access';
+import { type Actor, type Database, HttpError, requireAdmin, roomContext, documentAccess, threadAccess } from './access';
 import { adminEmails, appUrl, MAX_PDF_BYTES, teamId } from './config';
 import { sendMail, sendRoomInvite } from './mail';
 import { storage } from './storage';
@@ -23,14 +23,14 @@ async function validStage(tx: Database, stageId: string) {
   return stage;
 }
 async function validDocuments(tx: Database, documentIds: string[]) {
-  const count = await tx.document.count({ where: { id: { in: documentIds }, teamId } });
+  const count = await tx.document.count({ where: { id: { in: documentIds }, teamId, huDeletedAt: null } });
   if (count !== documentIds.length) throw new HttpError(400, 'Choose documents from this library.');
 }
 async function discussionAccess(tx: Database, actor: Actor, roomId: string, discussionId: string) {
   await roomContext(tx, actor, roomId);
   const discussion = await tx.huRoomDiscussion.findFirst({ where: { id: discussionId, roomId, teamId } });
   if (!discussion) throw new HttpError(404, 'Discussion not found.');
-  if (discussion.documentId) await documentAccess(tx, actor, roomId, discussion.documentId);
+  await threadAccess(tx, actor, roomId, discussion.documentId);
   return discussion;
 }
 async function validMentions(tx: Database, roomId: string, recipients: string[]) {
@@ -65,6 +65,27 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       for (let i = 0; i < data.stageIds.length; i++) await tx.huRoomStage.update({ where: { id: data.stageIds[i] }, data: { position: offset + i } });
       for (let i = 0; i < data.stageIds.length; i++) await tx.huRoomStage.update({ where: { id: data.stageIds[i] }, data: { position: i } });
       return { value: { updated: true } };
+    }
+    case 'deleteStage': {
+      requireAdmin(actor);
+      const data = z.object({ stageId: id, replacementStageId: id }).parse(input);
+      if (data.stageId === data.replacementStageId) throw new HttpError(400, 'Choose a different stage to move rooms and documents to.');
+      await validStage(tx, data.stageId); await validStage(tx, data.replacementStageId);
+      // Move every room and document rule first; both relations are ON DELETE RESTRICT.
+      const rooms = await tx.huInvestorRoom.updateMany({ where: { teamId, stageId: data.stageId }, data: { stageId: data.replacementStageId } });
+      const documents = await tx.huDocumentAccess.updateMany({ where: { teamId, minimumStageId: data.stageId }, data: { minimumStageId: data.replacementStageId } });
+      await tx.huRoomStage.delete({ where: { id: data.stageId } });
+      return { value: { deleted: true, movedRooms: rooms.count, movedDocuments: documents.count } };
+    }
+    case 'deleteDocument': {
+      requireAdmin(actor);
+      const data = z.object({ documentId: id }).parse(input);
+      await validDocuments(tx, [data.documentId]);
+      // Soft delete: discussions and reading analytics keep their references;
+      // the S3 object versions are retained so the document can be restored.
+      await tx.document.update({ where: { id: data.documentId }, data: { huDeletedAt: new Date(), huDeletedById: actor.id } });
+      const removed = await tx.huRoomDocument.deleteMany({ where: { documentId: data.documentId, teamId } });
+      return { value: { deleted: true, removedFromRooms: removed.count } };
     }
     case 'createRoom': {
       requireAdmin(actor);
@@ -251,8 +272,7 @@ export async function performAction(actor: Actor, input: Record<string, unknown>
         const user = await db.user.findUnique({ where: { id: notice.userId } });
         if (!user?.email || !user.emailVerified || user.id === actor.id) continue;
         const recipient = { id: user.id, email: user.email.toLowerCase(), admin: adminEmails().includes(user.email.toLowerCase()) };
-        if (notice.documentId) await documentAccess(db, recipient, notice.roomId, notice.documentId);
-        else await roomContext(db, recipient, notice.roomId);
+        await threadAccess(db, recipient, notice.roomId, notice.documentId);
         await sendMail(user.email, 'You were mentioned in a HorseUp room', `A discussion in your HorseUp room mentions you. Sign in to read it:\n${appUrl()}/rooms/${notice.roomId}`);
       }
     } catch { failedNotifications++; }
@@ -263,7 +283,7 @@ export async function performAction(actor: Actor, input: Record<string, unknown>
 async function publishUpload(actor: Actor, input: Record<string, unknown>) {
   requireAdmin(actor);
   const data = z.object({ versionId: id, pages: z.number().int().min(1).max(10000) }).parse(input);
-  const version = await db.documentVersion.findFirst({ where: { id: data.versionId, document: { teamId } } });
+  const version = await db.documentVersion.findFirst({ where: { id: data.versionId, document: { teamId, huDeletedAt: null } } });
   if (!version) throw new HttpError(404, 'Upload not found.');
   // Published versions are immutable: retries must not repin old discussions to
   // a later S3 object uploaded through a still-valid presigned upload URL.

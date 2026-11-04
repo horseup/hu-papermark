@@ -106,6 +106,57 @@ test('analytics reject spoofed sessions and draft pages; repeated reports do not
   assert.equal(rows[0].visibleMs, 1000);
 });
 
+test('deleting a stage moves rooms and document rules to the replacement; investors cannot delete', async () => {
+  const temporary = await act(admin, 'createStage', { name: 'Temporary' });
+  const tempRoom = await act(admin, 'createRoom', { name: 'Investor C', stageId: temporary.id, documentIds: [] });
+  const tempDoc = await db.document.create({ data: { name: 'Synthetic stage PDF', file: 'stage.pdf', teamId } });
+  await act(admin, 'setDocumentStage', { documentId: tempDoc.id, stageId: temporary.id });
+  await denied(act(investor, 'deleteStage', { stageId: temporary.id, replacementStageId: intro.id }), 403);
+  await denied(act(admin, 'deleteStage', { stageId: temporary.id, replacementStageId: temporary.id }), 400);
+  await denied(act(admin, 'deleteStage', { stageId: temporary.id, replacementStageId: 'missing-stage' }), 400);
+  const result = await act(admin, 'deleteStage', { stageId: temporary.id, replacementStageId: intro.id });
+  assert.equal(result.movedRooms, 1);
+  assert.equal(result.movedDocuments, 1);
+  assert.equal(await db.huRoomStage.count({ where: { id: temporary.id } }), 0);
+  assert.equal((await db.huInvestorRoom.findUniqueOrThrow({ where: { id: tempRoom.id } })).stageId, intro.id);
+  assert.equal((await db.huDocumentAccess.findUniqueOrThrow({ where: { documentId: tempDoc.id } })).minimumStageId, intro.id);
+  await db.huInvestorRoom.delete({ where: { id: tempRoom.id } });
+});
+
+test('deleting a document removes it from every room, keeps its discussions and blocks reuse', async () => {
+  const removable = await db.document.create({ data: { name: 'Synthetic removable PDF', file: 'removable.pdf', teamId } });
+  const removableVersion = await db.documentVersion.create({ data: { documentId: removable.id, versionNumber: 1, file: 'removable.pdf', numPages: 2, isPrimary: true, huS3VersionId: 'synthetic-removable' } });
+  await act(admin, 'setDocumentStage', { documentId: removable.id, stageId: intro.id });
+  await act(admin, 'setRoomDocuments', { roomId: room.id, documentIds: [doc.id, removable.id] });
+  await act(admin, 'setRoomDocuments', { roomId: otherRoom.id, documentIds: [doc.id, removable.id] });
+  await documentAccess(db, investor, room.id, removable.id);
+  const thread = await act(investor, 'createDiscussion', { roomId: room.id, title: 'About the removable PDF', body: 'Question', documentId: removable.id, versionId: removableVersion.id, pageNumber: 1, requestId: randomUUID() });
+
+  await denied(act(investor, 'deleteDocument', { documentId: removable.id }), 403);
+  const result = await act(admin, 'deleteDocument', { documentId: removable.id });
+  assert.equal(result.removedFromRooms, 2);
+  assert.equal(await db.huRoomDocument.count({ where: { documentId: removable.id } }), 0);
+  const saved = await db.document.findUniqueOrThrow({ where: { id: removable.id } });
+  assert.ok(saved.huDeletedAt);
+  assert.equal(saved.huDeletedById, admin.id);
+
+  await denied(documentAccess(db, investor, room.id, removable.id), 404);
+  await denied(documentAccess(db, admin, room.id, removable.id), 404);
+  await denied(act(admin, 'deleteDocument', { documentId: removable.id }), 400);
+  await denied(act(admin, 'setRoomDocuments', { roomId: room.id, documentIds: [removable.id] }), 400);
+  await denied(act(admin, 'setDocumentStage', { documentId: removable.id, stageId: intro.id }), 400);
+  await denied(act(admin, 'beginUpload', { name: 'New version', documentId: removable.id, stageId: intro.id, size: 10 }), 400);
+  await denied(act(investor, 'createDiscussion', { roomId: room.id, title: 'New', body: 'Question', documentId: removable.id, versionId: removableVersion.id, pageNumber: 1, requestId: randomUUID() }), 404);
+
+  // The existing thread survives as a room-level conversation.
+  await act(admin, 'reply', { roomId: room.id, discussionId: thread.id, body: 'Answer after removal', requestId: randomUUID() });
+  await act(investor, 'resolveDiscussion', { roomId: room.id, discussionId: thread.id, resolved: true });
+  const kept = await db.huRoomDiscussion.findUniqueOrThrow({ where: { id: thread.id }, include: { messages: true } });
+  assert.equal(kept.documentVersionId, removableVersion.id);
+  assert.equal(kept.messages.length, 2);
+  await denied(act(outsider, 'reply', { roomId: room.id, discussionId: thread.id, body: 'Outsider', requestId: randomUUID() }), 404);
+});
+
 test('revocation and room archive immediately remove access', async () => {
   await act(admin, 'archiveRoom', { roomId: room.id, archived: true });
   await denied(roomContext(db, investor, room.id), 404);

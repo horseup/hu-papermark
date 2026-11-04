@@ -25,6 +25,13 @@ export default function Library({ data, refresh }: { data: Workspace; refresh: (
     {message && <p role="status">{message}</p>}{error && <p role="alert" className="error">{error}</p>}
     {data.library.map(d => <div className="room-row" key={d.id}><span><strong>{d.name}</strong><small>{d.versions[0] ? `Published version ${d.versions[0].versionNumber}` : 'Unpublished'}</small></span>
       <label className="compact">Minimum stage<select aria-label={`Minimum stage for ${d.name}`} value={d.huAccessRule?.minimumStageId || ''} disabled={busy} onChange={async e => { setBusy(true); setError(''); try { await action('setDocumentStage', { documentId: d.id, stageId: e.target.value }); await refresh(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }}><option value="" disabled>Select a stage</option>{data.stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+      <button type="button" className="quiet danger" disabled={busy} onClick={async () => {
+        const rooms = d._count?.huRoomSelections ?? 0;
+        if (!window.confirm(`Delete "${d.name}"? It is removed from the library and from ${rooms} room(s) immediately. Existing discussions stay, without access to the document.`)) return;
+        setBusy(true); setError(''); setMessage('');
+        try { await action('deleteDocument', { documentId: d.id }); await refresh(); setMessage(`"${d.name}" was deleted and removed from ${rooms} room(s).`); }
+        catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+      }}>Delete</button>
     </div>)}
   </section>;
 }
