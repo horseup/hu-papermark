@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { HuNotification, HuNotificationKind } from '@prisma/client';
 import { type Actor, type Database, documentAccess, threadAccess } from './access';
-import { adminEmails, appUrl, investorReplyTo, NOTIFICATION_SENDER_NAME, notificationMaxWaitMs, notificationQuietMs, teamId } from './config';
+import { adminEmails, appUrl, investorReplyTo, notificationMaxWaitMs, notificationQuietMs, teamId } from './config';
 import { db } from './db';
 import { sendMail } from './mail';
 import { adminActivityEmail, investorUpdateEmail, type AdminRoomActivity, type InvestorRoomUpdate } from './emails';
@@ -187,12 +187,11 @@ async function investorEmail(rows: HuNotification[], recipient: Recipient): Prom
     rooms.push({ kind: 'updates', name: room, url: `${appUrl()}/rooms/${encodeURIComponent(roomId)}`,
       added: added.map(id => names.document(id)?.name ?? 'Document'),
       updated: updated.map(id => { const doc = names.document(id); return `${doc?.name ?? 'Document'}${doc?.versions[0] ? ` (version ${doc.versions[0].versionNumber})` : ''}`; }),
-      discussions: [...threads].map(([discussionId, entries]) => {
-        const replies = entries.filter(e => e.kind === 'THREAD_REPLY').length;
-        const mentioned = entries.some(e => e.kind === 'MENTION');
-        const what = mentioned ? 'You were mentioned in' : replies > 1 ? `${replies} new replies in` : 'New reply in';
-        return `${what} ${names.topic(discussionId)}`;
-      }),
+      discussions: [...threads].map(([discussionId, entries]) => ({
+        replies: entries.filter(e => e.kind === 'THREAD_REPLY').length,
+        mentioned: entries.some(e => e.kind === 'MENTION'),
+        topic: names.topic(discussionId),
+      })),
       optOutUrl: membership ? unsubscribeUrl(membership.id) : undefined });
   }
   const optOuts = rooms.flatMap(r => r.kind === 'updates' && r.optOutUrl ? [r.optOutUrl] : []);
@@ -233,7 +232,7 @@ async function deliver(email: string, rows: HuNotification[], now: Date) {
   const ids = keep.map(r => r.id);
   try {
     const mail = recipient.admin ? await adminEmail(keep) : await investorEmail(keep, recipient);
-    await sendMail(email, mail.subject, mail.text, { html: mail.html, fromName: NOTIFICATION_SENDER_NAME, replyTo: mail.replyTo, headers: mail.headers });
+    await sendMail(email, mail.subject, mail.text, { html: mail.html, replyTo: mail.replyTo, headers: mail.headers });
     await db.huNotification.updateMany({ where: { id: { in: ids } }, data: { processedAt: new Date(), outcome: 'sent', claimedAt: null } });
     return { sent: 1, skipped: drop.length, failed: 0 };
   } catch (error) {

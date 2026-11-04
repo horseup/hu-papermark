@@ -14,6 +14,10 @@ require.extensions['.ts'] = (module, filename) => {
 };
 const { signInEmail, invitationEmail, investorUpdateEmail, adminActivityEmail } = require('../lib/emails.ts');
 const { safeHref } = require('../lib/email-layout.ts');
+process.env.HORSEUP_EMAIL_FROM = 'HorseUp <noreply@example.test>';
+process.env.NEXTAUTH_URL = 'https://dealroom.example.test';
+const mail = require('../lib/mail.ts');
+const SENDER = 'HorseUp Deal Room';
 
 const app = 'https://dealroom.example.test';
 const signInUrl = `${app}/api/auth/callback/email?callbackUrl=https%3A%2F%2Fdealroom.example.test%2F&token=abc123&email=investor%2Btest%40example.test`;
@@ -26,10 +30,10 @@ const emails = {
   invitation: invitationEmail('SYNTHETIC Fund A', `${app}/rooms/room1`),
   'investor-update': investorUpdateEmail([{ kind: 'updates', name: 'SYNTHETIC Fund A', url: `${app}/rooms/room1`,
     added: ['SYNTHETIC-D2-deck.pdf', 'Teaser'], updated: ['SYNTHETIC-D3-financials.pdf (version 2)'],
-    discussions: ['2 new replies in a room-wide discussion', 'You were mentioned in a discussion about "SYNTHETIC-D2-deck.pdf"'], optOutUrl: optOut }]),
+    discussions: [{ replies: 2, mentioned: false, topic: 'a room-wide discussion' }, { replies: 1, mentioned: true, topic: 'a discussion about "SYNTHETIC-D2-deck.pdf"' }], optOutUrl: optOut }]),
   'investor-update-two-rooms': investorUpdateEmail([
     { kind: 'updates', name: 'SYNTHETIC Fund A', url: `${app}/rooms/room1`, added: ['Teaser'], updated: [], discussions: [], optOutUrl: optOut },
-    { kind: 'updates', name: 'SYNTHETIC Fund B', url: `${app}/rooms/room2`, added: [], updated: [], discussions: ['New reply in a room-wide discussion'], optOutUrl: `${optOut}2` }]),
+    { kind: 'updates', name: 'SYNTHETIC Fund B', url: `${app}/rooms/room2`, added: [], updated: [], discussions: [{ replies: 1, mentioned: false, topic: 'a room-wide discussion' }], optOutUrl: `${optOut}2` }]),
   'access-ended': investorUpdateEmail([{ kind: 'ended', name: 'SYNTHETIC Fund A' }]),
   'admin-activity': adminActivityEmail([{ name: 'SYNTHETIC Fund A', url: `${app}/rooms/room1`, lines: [
     'investor@example.test accepted the invitation', 'investor@example.test opened the room for the first time',
@@ -39,13 +43,60 @@ const emails = {
     { name: 'SYNTHETIC Fund B', url: `${app}/rooms/room2`, lines: ['other@example.test accepted the invitation'] }]),
 };
 
+const preheaderOf = html => /<div style="display: none;[^"]*">([^<&]*(?:&(?!zwnj;)[^<&]*)*)/.exec(html)[1]
+  .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
 if (process.env.EMAIL_PREVIEW_DIR) {
-  fs.mkdirSync(process.env.EMAIL_PREVIEW_DIR, { recursive: true });
-  for (const [name, mail] of Object.entries(emails)) {
-    fs.writeFileSync(path.join(process.env.EMAIL_PREVIEW_DIR, `${name}.html`), mail.html);
-    fs.writeFileSync(path.join(process.env.EMAIL_PREVIEW_DIR, `${name}.txt`), `Subject: ${mail.subject}\n\n${mail.text}\n`);
+  const dir = process.env.EMAIL_PREVIEW_DIR;
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, item] of Object.entries(emails)) {
+    fs.writeFileSync(path.join(dir, `${name}.html`), item.html);
+    fs.writeFileSync(path.join(dir, `${name}.txt`), `Subject: ${item.subject}\n\n${item.text}\n`);
   }
+  // Approximation of an inbox list: sender, subject, then the preheader in grey.
+  const esc = v => v.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const rows = Object.entries(emails).map(([name, item]) => `<tr><td class="s">${SENDER}</td><td><b>${esc(item.subject)}</b><span class="p"> – ${esc(preheaderOf(item.html))}</span></td><td class="n">${name}</td></tr>`).join('');
+  fs.writeFileSync(path.join(dir, 'inbox-list.html'), `<!DOCTYPE html><meta charset="utf-8"><style>body{font:14px Arial,sans-serif;margin:16px;color:#202124}table{border-collapse:collapse;width:100%}td{padding:9px 10px;border-bottom:1px solid #eee;white-space:nowrap}td.s{font-weight:bold;width:150px}.p{color:#5f6368}td.n{color:#aaa;font-size:11px}</style><table>${rows}</table>`);
+  fs.writeFileSync(path.join(dir, 'inbox-list.txt'), Object.entries(emails).map(([name, item]) => `${name}\n  ${SENDER} | ${item.subject} – ${preheaderOf(item.html)}`).join('\n') + '\n');
 }
+
+test('every HTML email starts with a hidden preheader that adds to the subject', () => {
+  const expected = {
+    'sign-in': 'Your personal link is valid for 15 minutes.',
+    invitation: 'Open the room with the email address this was sent to.',
+    'investor-update': '2 new documents, 1 updated document, 2 replies, 1 mention',
+    'investor-update-two-rooms': '1 new document, 1 reply',
+    'access-ended': 'Reply to this email if you have questions.',
+    'admin-activity': 'investor@example.test accepted the invitation (+2 more)',
+    'admin-activity-two-rooms': 'SYNTHETIC Fund A: investor@example.test wrote in a room-wide discussion (+1 more)',
+  };
+  for (const [name, item] of Object.entries(emails)) {
+    assert.equal(preheaderOf(item.html), expected[name], name);
+    const body = item.html.slice(item.html.indexOf('<body'));
+    assert.match(body, /^<body[^>]*>\s*<div style="display: none;[^"]*max-height: 0;[^"]*overflow: hidden; mso-hide: all;">/, name);
+    assert.ok(body.includes('&zwnj;&nbsp;'.repeat(20)), name);
+    assert.ok(!item.text.includes(expected[name]) || name === 'sign-in', `${name}: text part stays unchanged`);
+  }
+  const mixed = investorUpdateEmail([{ kind: 'ended', name: 'A' }, { kind: 'updates', name: 'B', url: `${app}/rooms/b`, added: ['Deck'], updated: [], discussions: [] }]);
+  assert.equal(preheaderOf(mixed.html), '1 new document, access ended in 1 room');
+  assert.ok(preheaderOf(investorUpdateEmail([{ kind: 'updates', name: evilRoom, url: `${app}/rooms/r`, added: [], updated: [], discussions: [] }]).html) === '');
+  const hostile = adminActivityEmail([{ name: evilRoom, url: `${app}/rooms/r`, lines: ['<b>x</b> wrote'] }]).html;
+  assert.ok(hostile.includes('mso-hide: all;">&lt;b&gt;x&lt;/b&gt; wrote'));
+});
+
+test('sign-in, invitation and notifications all send as "HorseUp Deal Room" from the configured address', async () => {
+  const sent = [];
+  mail.setMailTransport(async message => { sent.push(message); });
+  try {
+    await mail.sendRoomInvite('investor@example.test', 'SYNTHETIC Fund A', 'room1');
+    const signIn = signInEmail(signInUrl);
+    await mail.sendMail('investor@example.test', signIn.subject, signIn.text, { html: signIn.html });
+  } finally { mail.setMailTransport(null); }
+  assert.deepEqual(sent.map(m => m.from), ['HorseUp Deal Room <noreply@example.test>', 'HorseUp Deal Room <noreply@example.test>']);
+  assert.equal(sent[0].subject, 'Your invitation to SYNTHETIC Fund A');
+  assert.ok(sent[0].html.includes(`href="${app}/rooms/room1"`) && sent[1].html.includes('>Sign in</a>'));
+  assert.equal(mail.senderWithName('noreply@example.test', 'HorseUp Deal Room'), 'HorseUp Deal Room <noreply@example.test>');
+});
 
 test('plain-text parts are unchanged from the text-only emails', () => {
   assert.equal(emails['sign-in'].text, `Use this personal link to sign in:\n\n${signInUrl}\n\nIt expires in 15 minutes and can be used once. If you did not request it, you can ignore this email.`);
@@ -91,7 +142,7 @@ test('unsubscribe links stay in the HTML part', () => {
 test('every interpolated value is escaped', () => {
   const mails = [
     invitationEmail(evilRoom, `${app}/rooms/room1`),
-    investorUpdateEmail([{ kind: 'updates', name: evilRoom, url: `${app}/rooms/room1`, added: [evilDoc], updated: [`${evilDoc} (version 2)`], discussions: [`New reply in a discussion about "${evilDoc}"`], optOutUrl: optOut }]),
+    investorUpdateEmail([{ kind: 'updates', name: evilRoom, url: `${app}/rooms/room1`, added: [evilDoc], updated: [`${evilDoc} (version 2)`], discussions: [{ replies: 1, mentioned: false, topic: `a discussion about "${evilDoc}"` }], optOutUrl: optOut }]),
     investorUpdateEmail([{ kind: 'ended', name: evilRoom }]),
     adminActivityEmail([{ name: evilRoom, url: `${app}/rooms/room1`, lines: [`"><script>x</script>@example.test wrote in a discussion about "${evilDoc}"`] }]),
   ];

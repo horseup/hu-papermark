@@ -1,8 +1,8 @@
 import { Resend } from 'resend';
-import { appUrl } from './config';
+import { appUrl, SENDER_NAME } from './config';
 import { invitationEmail } from './emails';
 
-export type MailOptions = { html?: string; fromName?: string; replyTo?: string; headers?: Record<string, string> };
+export type MailOptions = { html?: string; replyTo?: string; headers?: Record<string, string> };
 export type MailTransport = (message: { from: string; to: string; subject: string; text: string; html?: string; replyTo?: string; headers?: Record<string, string> }) => Promise<void>;
 
 async function resendTransport(message: Parameters<MailTransport>[0]) {
@@ -24,7 +24,8 @@ export function senderWithName(from: string, name: string) {
 export async function sendMail(to: string, subject: string, text: string, options: MailOptions = {}) {
   const configured = process.env.HORSEUP_EMAIL_FROM;
   if (!configured) throw new Error('Email delivery is not configured');
-  const from = options.fromName ? senderWithName(configured, options.fromName) : configured;
+  // Every deal room email (sign-in, invitation, notifications) uses the same display name.
+  const from = senderWithName(configured, SENDER_NAME);
   await transport({ from, to, subject, text, ...(options.html ? { html: options.html } : {}), ...(options.replyTo ? { replyTo: options.replyTo } : {}), ...(options.headers ? { headers: options.headers } : {}) });
 }
 

@@ -26,7 +26,13 @@ export const list = (items: string[]): Section => ({ html: `<ul style="${TEXT} p
 export const link = (text: string, url: string): Section => ({ html: `<p style="${TEXT}"><a href="${safeHref(url)}" style="color: #027C81; font-weight: 600;">${escapeHtml(text)}</a></p>` });
 export const small = (html: string): Section => ({ html: `<p style="margin: 0 0 8px; font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.5; color: #9CA3AF; text-align: center;">${html}</p>` });
 
-export function renderEmail(params: { title: string; sections: Section[]; cta?: { label: string; url: string }; afterCta?: Section[]; footerNote?: string }) {
+/** Hidden first line of the body: mail clients show it after the subject in the inbox list.
+ * The zero-width padding keeps the visible body text out of that preview. */
+export function preheaderHtml(text: string) {
+  return `<div style="display: none; font-size: 1px; color: #F9F4F2; line-height: 1px; max-height: 0; max-width: 0; opacity: 0; overflow: hidden; mso-hide: all;">${escapeHtml(text)}${'&zwnj;&nbsp;'.repeat(90)}</div>`;
+}
+
+export function renderEmail(params: { title: string; preheader: string; sections: Section[]; cta?: { label: string; url: string }; afterCta?: Section[]; footerNote?: string }) {
   const title = escapeHtml(params.title);
   const cta = params.cta
     ? `<a href="${safeHref(params.cta.url)}" style="display: inline-block; background-color: #027C81; color: #ffffff; font-family: 'Inter', sans-serif; font-weight: 600; font-size: 16px; padding: 12px 32px; text-decoration: none; border-radius: 6px;">${escapeHtml(params.cta.label)}</a>`
@@ -52,6 +58,7 @@ export function renderEmail(params: { title: string; sections: Section[]; cta?: 
   </style>
 </head>
 <body style="background-color: #F9F4F2; font-family: 'Inter', sans-serif; color: #3A231B; margin: 0; padding: 0;">
+  ${preheaderHtml(params.preheader)}
   <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
     <tr>
       <td align="center" style="padding: 40px 20px;">
