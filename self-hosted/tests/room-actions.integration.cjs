@@ -1,8 +1,8 @@
-// Database integration tests. These do not send email, access AWS, or drive UI.
+// Database integration tests. These do not send email (the mail transport is stubbed), access AWS, or drive UI.
 // Run only against a disposable local PostgreSQL database with the schema applied.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHmac } = require('node:crypto');
 const fs = require('node:fs');
 const ts = require('typescript');
 
@@ -11,8 +11,14 @@ if (!['localhost', '127.0.0.1'].includes(url.hostname) || !url.pathname.endsWith
   throw new Error('Use a disposable localhost database whose name ends in _test.');
 }
 process.env.HORSEUP_TEAM_ID = `integration-${randomUUID()}`;
-process.env.HORSEUP_ADMIN_EMAILS = 'admin@example.test';
+process.env.HORSEUP_ADMIN_EMAILS = 'admin@example.test,admin2@example.test';
 process.env.NEXTAUTH_URL = 'http://localhost:3000';
+process.env.NEXTAUTH_SECRET = 'integration-test-secret';
+process.env.HORSEUP_EMAIL_FROM = 'Old Name <noreply@example.test>';
+delete process.env.RESEND_API_KEY;
+delete process.env.HORSEUP_INVESTOR_REPLY_TO;
+delete process.env.HORSEUP_NOTIFY_QUIET_MS;
+delete process.env.HORSEUP_NOTIFY_MAX_WAIT_MS;
 // Compile the real server modules without adding a test-runner dependency.
 require.extensions['.ts'] = (module, filename) => {
   const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -20,19 +26,28 @@ require.extensions['.ts'] = (module, filename) => {
   }).outputText;
   module._compile(code, filename);
 };
+const mail = require('../lib/mail.ts');
+// Every email lands here; nothing reaches Resend.
+const sent = [];
+let failNextSend = false;
+mail.setMailTransport(async message => { if (failNextSend) { failNextSend = false; throw new Error('synthetic failure'); } sent.push(message); });
 const { db } = require('../lib/db.ts');
+const { flushNotifications, unsubscribe, visibleDocuments, notifyDocumentChanges } = require('../lib/notifications.ts');
 const { performAction } = require('../lib/actions.ts');
 const { roomContext, documentAccess } = require('../lib/access.ts');
 const teamId = process.env.HORSEUP_TEAM_ID;
 const admin = { id: randomUUID(), email: 'admin@example.test', admin: true };
 const investor = { id: randomUUID(), email: `${randomUUID()}@example.test`, admin: false };
 const outsider = { id: randomUUID(), email: `${randomUUID()}@example.test`, admin: false };
+const admin2 = { id: randomUUID(), email: 'admin2@example.test', admin: true };
+const people = Array.from({ length: 5 }, () => ({ id: randomUUID(), email: `${randomUUID()}@example.test`, admin: false }));
+const [inv1, inv2, inv3, inv4, pendingInvitee] = people;
 let intro, diligence, room, otherRoom, doc, version, draft, membership;
 const act = (actor, action, values = {}) => performAction(actor, { action, ...values });
 const denied = (promise, status) => assert.rejects(promise, error => error.status === status);
 
 before(async () => {
-  for (const actor of [admin, investor, outsider]) await db.user.create({ data: { id: actor.id, email: actor.email, emailVerified: new Date() } });
+  for (const actor of [admin, admin2, investor, outsider, ...people]) await db.user.create({ data: { id: actor.id, email: actor.email, emailVerified: new Date() } });
   await db.team.create({ data: { id: teamId, name: 'Synthetic integration fixtures', ignoredDomains: [], globalBlockList: [] } });
   intro = await act(admin, 'createStage', { name: 'Introduction' });
   diligence = await act(admin, 'createStage', { name: 'Diligence' });
@@ -189,12 +204,175 @@ test('revocation and room archive immediately remove access', async () => {
   await denied(act(investor, 'acceptInvitation', { roomId: room.id }), 404);
 });
 
+// ---- Notification emails ---------------------------------------------------
+const MINUTE = 60 * 1000;
+// Flush as if `minutes` had passed; the default quiet window is 10 minutes.
+const flushAfter = minutes => flushNotifications(new Date(Date.now() + minutes * MINUTE));
+async function drain() { await flushAfter(24 * 60); sent.length = 0; }
+const to = actor => sent.filter(m => m.to === actor.email);
+const recipients = () => sent.map(m => m.to).sort();
+async function publishedDocument(name, stageId) {
+  const document = await db.document.create({ data: { name, file: `${name}.pdf`, teamId } });
+  await db.documentVersion.create({ data: { documentId: document.id, versionNumber: 1, file: `${name}.pdf`, numPages: 2, isPrimary: true, huS3VersionId: `v-${randomUUID()}` } });
+  await act(admin, 'setDocumentStage', { documentId: document.id, stageId });
+  return document;
+}
+async function member(roomId, actor, accepted = true) {
+  return db.huRoomMembership.create({ data: { roomId, email: actor.email, invitedById: admin.id, ...(accepted ? { userId: actor.id, acceptedAt: new Date() } : {}) } });
+}
+const signature = membershipId => createHmac('sha256', 'integration-test-secret').update(`hu-unsubscribe:${membershipId}`).digest('base64url');
+let nRoom, nRoomB, deckDoc, termsDoc, dataDoc;
+
+test('notification fixtures', async () => {
+  await drain();
+  deckDoc = await publishedDocument('Synthetic Deck', diligence.id);
+  termsDoc = await publishedDocument('Synthetic Terms', intro.id);
+  dataDoc = await publishedDocument('Synthetic Data Pack', diligence.id);
+  nRoom = await act(admin, 'createRoom', { name: 'SYNTHETIC Notify A', stageId: intro.id, documentIds: [deckDoc.id] });
+  nRoomB = await act(admin, 'createRoom', { name: 'SYNTHETIC Notify B', stageId: intro.id, documentIds: [deckDoc.id] });
+  await member(nRoom.id, inv1); await member(nRoom.id, inv2); await member(nRoom.id, pendingInvitee, false);
+  await member(nRoomB.id, inv3);
+  await drain();
+});
+
+test('document changes are debounced into one email per investor and skip everyone else', async () => {
+  await act(admin, 'setRoomStage', { roomId: nRoom.id, stageId: diligence.id });
+  assert.deepEqual(await flushAfter(0), { sent: 0, skipped: 0, failed: 0 }, 'nothing is sent inside the quiet window');
+  await act(admin, 'setRoomDocuments', { roomId: nRoom.id, documentIds: [deckDoc.id, termsDoc.id] });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [inv1.email, inv2.email].sort());
+  const message = to(inv1)[0];
+  assert.equal(to(inv1).length, 1);
+  assert.equal(message.from, 'HorseUp Deal Room <noreply@example.test>');
+  assert.equal(message.replyTo, 'investors@horseup.de');
+  assert.equal(message.subject, 'Updates in SYNTHETIC Notify A');
+  assert.match(message.text, /New documents available:\n- Synthetic Deck\n- Synthetic Terms/);
+  assert.ok(message.text.includes(`http://localhost:3000/rooms/${nRoom.id}`));
+  const membership = await db.huRoomMembership.findFirstOrThrow({ where: { roomId: nRoom.id, userId: inv1.id } });
+  assert.equal(message.headers['List-Unsubscribe'], `<http://localhost:3000/unsubscribe?m=${membership.id}&t=${signature(membership.id)}>`);
+  assert.doesNotMatch(message.text, /Synthetic Data Pack/);
+  sent.length = 0;
+});
+
+test('a new published version notifies investors who can open the document', async () => {
+  await db.$transaction(async tx => {
+    const before = await visibleDocuments(tx);
+    await tx.documentVersion.updateMany({ where: { documentId: termsDoc.id }, data: { isPrimary: false } });
+    await tx.documentVersion.create({ data: { documentId: termsDoc.id, versionNumber: 2, file: 'terms-2.pdf', numPages: 3, isPrimary: true, huS3VersionId: `v-${randomUUID()}` } });
+    await notifyDocumentChanges(tx, admin, before);
+  });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [inv1.email, inv2.email].sort());
+  assert.match(to(inv1)[0].text, /Updated documents:\n- Synthetic Terms \(version 2\)/);
+  sent.length = 0;
+});
+
+test('access is re-checked at send time; revoked investors only hear that access ended', async () => {
+  await act(admin, 'setRoomStage', { roomId: nRoomB.id, stageId: diligence.id });
+  const membership = await db.huRoomMembership.findFirstOrThrow({ where: { roomId: nRoomB.id, userId: inv3.id } });
+  await act(admin, 'revokeMember', { roomId: nRoomB.id, membershipId: membership.id });
+  const pending = await db.huRoomMembership.findFirstOrThrow({ where: { roomId: nRoom.id, email: pendingInvitee.email } });
+  await act(admin, 'revokeMember', { roomId: nRoom.id, membershipId: pending.id });
+  const result = await flushAfter(11);
+  assert.deepEqual(recipients(), [inv3.email]);
+  assert.equal(to(inv3)[0].subject, 'Your access to SYNTHETIC Notify B has ended');
+  assert.doesNotMatch(to(inv3)[0].text, /Synthetic Deck|unsubscribe/);
+  assert.equal(result.skipped, 1, 'the document notice for the revoked investor is dropped');
+  sent.length = 0;
+});
+
+test('discussions: admins hear investor posts, investors hear replies in their threads, never the author', async () => {
+  const thread = await act(inv1, 'createDiscussion', { roomId: nRoom.id, title: 'Synthetic room question', body: 'Question', documentId: null, versionId: null, pageNumber: null, requestId: randomUUID() });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [admin.email, admin2.email].sort());
+  assert.ok(to(admin)[0].text.includes(`${inv1.email} wrote in a room-wide discussion`));
+  assert.doesNotMatch(to(admin)[0].text, /Synthetic room question|Question/);
+  sent.length = 0;
+
+  await act(admin, 'reply', { roomId: nRoom.id, discussionId: thread.id, body: 'Answer', requestId: randomUUID() });
+  await act(admin, 'reply', { roomId: nRoom.id, discussionId: thread.id, body: 'Mention', mentionIds: [inv2.id], requestId: randomUUID() });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [inv1.email, inv2.email].sort(), 'admin posts do not notify the other admin');
+  assert.match(to(inv1)[0].text, /2 new replies in a room-wide discussion/);
+  assert.match(to(inv2)[0].text, /You were mentioned in a room-wide discussion/);
+  assert.doesNotMatch(to(inv1)[0].text, /Answer|Mention/);
+  sent.length = 0;
+
+  await act(inv2, 'reply', { roomId: nRoom.id, discussionId: thread.id, body: 'Follow-up', requestId: randomUUID() });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [admin.email, admin2.email, inv1.email].sort());
+  sent.length = 0;
+});
+
+test('a reply about a document the investor lost access to is not emailed', async () => {
+  const termsVersion = await db.documentVersion.findFirstOrThrow({ where: { documentId: termsDoc.id, isPrimary: true } });
+  const thread = await act(inv1, 'createDiscussion', { roomId: nRoom.id, title: 'Synthetic terms question', body: 'Question', documentId: termsDoc.id,
+    versionId: termsVersion.id, pageNumber: 1, requestId: randomUUID() });
+  await drain();
+  await act(admin, 'reply', { roomId: nRoom.id, discussionId: thread.id, body: 'Answer', requestId: randomUUID() });
+  await act(admin, 'setRoomDocuments', { roomId: nRoom.id, documentIds: [deckDoc.id] });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), []);
+  await act(admin, 'setRoomDocuments', { roomId: nRoom.id, documentIds: [deckDoc.id, termsDoc.id] });
+  await drain();
+});
+
+test('admins hear about an accepted invitation and only the first visit', async () => {
+  await member(nRoom.id, inv4, false);
+  await act(inv4, 'acceptInvitation', { roomId: nRoom.id });
+  await act(inv4, 'acceptInvitation', { roomId: nRoom.id });
+  await act(inv4, 'startVisit', { roomId: nRoom.id, visitId: randomUUID() });
+  await act(inv4, 'startVisit', { roomId: nRoom.id, visitId: randomUUID() });
+  await act(admin, 'startVisit', { roomId: nRoom.id, visitId: randomUUID() });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [admin.email, admin2.email].sort());
+  const text = to(admin2)[0].text;
+  assert.equal(text.match(/accepted the invitation/g).length, 1);
+  assert.equal(text.match(/opened the room for the first time/g).length, 1);
+  sent.length = 0;
+});
+
+test('failed deliveries are retried on the next flush', async () => {
+  await act(admin, 'setRoomDocuments', { roomId: nRoom.id, documentIds: [deckDoc.id, termsDoc.id, dataDoc.id] });
+  failNextSend = true;
+  const first = await flushAfter(11);
+  assert.equal(first.failed, 1);
+  const second = await flushAfter(11);
+  assert.equal(second.failed, 0);
+  assert.deepEqual(recipients(), [inv1.email, inv2.email, inv4.email].sort());
+  sent.length = 0;
+});
+
+test('opt-out stops update emails for that room but not the access-ended notice', async () => {
+  await act(inv2, 'setRoomNotifications', { roomId: nRoom.id, enabled: false });
+  const membership = await db.huRoomMembership.findFirstOrThrow({ where: { roomId: nRoom.id, userId: inv1.id } });
+  assert.equal(await unsubscribe(membership.id, 'forged-token'), false);
+  assert.equal((await db.huRoomMembership.findUniqueOrThrow({ where: { id: membership.id } })).notificationsMutedAt, null);
+  assert.equal(await unsubscribe(membership.id, signature(membership.id)), true);
+  await act(admin, 'setRoomDocuments', { roomId: nRoom.id, documentIds: [deckDoc.id] });
+  await act(admin, 'setRoomDocuments', { roomId: nRoom.id, documentIds: [deckDoc.id, termsDoc.id] });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [inv4.email]);
+  sent.length = 0;
+
+  await act(admin, 'archiveRoom', { roomId: nRoom.id, archived: true });
+  await act(admin, 'archiveRoom', { roomId: nRoom.id, archived: false });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [], 'archive undone before the batch: nothing ended');
+
+  await act(admin, 'archiveRoom', { roomId: nRoom.id, archived: true });
+  await flushAfter(11);
+  assert.deepEqual(recipients(), [inv1.email, inv2.email, inv4.email].sort());
+  assert.ok(sent.every(m => /has ended/.test(m.subject)));
+  sent.length = 0;
+});
+
 after(async () => {
   // All fixtures are owned by this run's random team and users.
   await db.huInvestorRoom.deleteMany({ where: { teamId } });
   await db.document.deleteMany({ where: { teamId } });
   await db.huRoomStage.deleteMany({ where: { teamId } });
   await db.team.deleteMany({ where: { id: teamId } });
-  await db.user.deleteMany({ where: { id: { in: [admin.id, investor.id, outsider.id] } } });
+  await db.user.deleteMany({ where: { id: { in: [admin.id, admin2.id, investor.id, outsider.id, ...people.map(p => p.id)] } } });
   await db.$disconnect();
 });

@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { PutObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { type Actor, type Database, HttpError, requireAdmin, roomContext, documentAccess, threadAccess } from './access';
-import { adminEmails, appUrl, MAX_PDF_BYTES, teamId } from './config';
-import { sendMail, sendRoomInvite } from './mail';
+import { adminEmails, MAX_PDF_BYTES, teamId } from './config';
+import { sendRoomInvite } from './mail';
+import { notifyAccessEnded, notifyAdmins, notifyDiscussionMessage, notifyDocumentChanges, visibleDocuments } from './notifications';
 import { storage } from './storage';
 import { db } from './db';
 
@@ -21,8 +22,9 @@ const anchorSchema = z.object({
     .refine(r => r.w > 0 && r.h > 0 && r.x + r.w <= 1.0001 && r.y + r.h <= 1.0001, 'Highlight outside the page.')).min(1).max(60),
   quote: z.string().trim().max(1000).optional(),
 }).strict();
-type Notice = { kind: 'invite'; email: string; roomId: string; roomName: string } |
-  { kind: 'mention'; userId: string; roomId: string; documentId: string | null };
+// Invitations are sent immediately; everything else goes through the debounced
+// notification outbox in ./notifications.
+type Notice = { kind: 'invite'; email: string; roomId: string; roomName: string };
 type Outcome = { value: unknown; notices?: Notice[] };
 
 async function validStage(tx: Database, stageId: string) {
@@ -79,10 +81,12 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       const data = z.object({ stageId: id, replacementStageId: id }).parse(input);
       if (data.stageId === data.replacementStageId) throw new HttpError(400, 'Choose a different stage to move rooms and documents to.');
       await validStage(tx, data.stageId); await validStage(tx, data.replacementStageId);
+      const before = await visibleDocuments(tx);
       // Move every room and document rule first; both relations are ON DELETE RESTRICT.
       const rooms = await tx.huInvestorRoom.updateMany({ where: { teamId, stageId: data.stageId }, data: { stageId: data.replacementStageId } });
       const documents = await tx.huDocumentAccess.updateMany({ where: { teamId, minimumStageId: data.stageId }, data: { minimumStageId: data.replacementStageId } });
       await tx.huRoomStage.delete({ where: { id: data.stageId } });
+      await notifyDocumentChanges(tx, actor, before);
       return { value: { deleted: true, movedRooms: rooms.count, movedDocuments: documents.count } };
     }
     case 'deleteDocument': {
@@ -107,23 +111,31 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       requireAdmin(actor);
       const data = z.object({ roomId: id, stageId: id }).parse(input);
       await roomContext(tx, actor, data.roomId); await validStage(tx, data.stageId);
-      return { value: await tx.huInvestorRoom.update({ where: { id: data.roomId }, data: { stageId: data.stageId } }) };
+      const before = await visibleDocuments(tx);
+      const room = await tx.huInvestorRoom.update({ where: { id: data.roomId }, data: { stageId: data.stageId } });
+      await notifyDocumentChanges(tx, actor, before);
+      return { value: room };
     }
     case 'setRoomDocuments': {
       requireAdmin(actor);
       const data = z.object({ roomId: id, documentIds: ids }).parse(input);
       await roomContext(tx, actor, data.roomId); await validDocuments(tx, data.documentIds);
+      const before = await visibleDocuments(tx);
       await tx.huRoomDocument.deleteMany({ where: { roomId: data.roomId, documentId: { notIn: data.documentIds } } });
       await tx.huRoomDocument.createMany({ data: data.documentIds.map(documentId => ({ roomId: data.roomId, documentId, teamId })), skipDuplicates: true });
+      await notifyDocumentChanges(tx, actor, before);
       return { value: { updated: true } };
     }
     case 'setDocumentStage': {
       requireAdmin(actor);
       const data = z.object({ documentId: id, stageId: id }).parse(input);
       await validStage(tx, data.stageId); await validDocuments(tx, [data.documentId]);
-      return { value: await tx.huDocumentAccess.upsert({ where: { documentId: data.documentId },
+      const before = await visibleDocuments(tx);
+      const rule = await tx.huDocumentAccess.upsert({ where: { documentId: data.documentId },
         create: { documentId: data.documentId, teamId, minimumStageId: data.stageId }, update: { minimumStageId: data.stageId },
-      }) };
+      });
+      await notifyDocumentChanges(tx, actor, before);
+      return { value: rule };
     }
     case 'invite': {
       requireAdmin(actor);
@@ -148,22 +160,32 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
         roomId: data.roomId, email: actor.email, revokedAt: null, room: { teamId, archivedAt: null },
       } });
       if (!found) throw new HttpError(404, 'Invitation not found.');
-      if (!found.acceptedAt) await tx.huRoomMembership.update({ where: { id: found.id }, data: { userId: actor.id, acceptedAt: new Date() } });
+      if (!found.acceptedAt) {
+        await tx.huRoomMembership.update({ where: { id: found.id }, data: { userId: actor.id, acceptedAt: new Date() } });
+        await notifyAdmins(tx, actor, data.roomId, 'ADMIN_INVITE_ACCEPTED');
+      }
       return { value: { accepted: true } };
     }
     case 'revokeMember': {
       requireAdmin(actor);
       const data = z.object({ roomId: id, membershipId: id }).parse(input);
       await roomContext(tx, actor, data.roomId);
-      const result = await tx.huRoomMembership.updateMany({ where: { id: data.membershipId, roomId: data.roomId }, data: { revokedAt: new Date() } });
-      if (!result.count) throw new HttpError(404, 'Member not found.');
+      const member = await tx.huRoomMembership.findFirst({ where: { id: data.membershipId, roomId: data.roomId } });
+      if (!member) throw new HttpError(404, 'Member not found.');
+      if (!member.revokedAt) {
+        await tx.huRoomMembership.update({ where: { id: member.id }, data: { revokedAt: new Date() } });
+        await notifyAccessEnded(tx, actor, data.roomId, [member]);
+      }
       return { value: { revoked: true } };
     }
     case 'archiveRoom': {
       requireAdmin(actor);
       const data = z.object({ roomId: id, archived: z.boolean() }).parse(input);
-      await roomContext(tx, actor, data.roomId);
-      return { value: await tx.huInvestorRoom.update({ where: { id: data.roomId }, data: { archivedAt: data.archived ? new Date() : null } }) };
+      const { room } = await roomContext(tx, actor, data.roomId);
+      if (data.archived && !room.archivedAt) {
+        await notifyAccessEnded(tx, actor, data.roomId, await tx.huRoomMembership.findMany({ where: { roomId: data.roomId, revokedAt: null } }));
+      }
+      return { value: await tx.huInvestorRoom.update({ where: { id: data.roomId }, data: { archivedAt: data.archived ? (room.archivedAt ?? new Date()) : null } }) };
     }
     case 'createDiscussion': {
       const data = z.object({ roomId: id, title, body: z.string().trim().min(1).max(20000), documentId: id.nullable(),
@@ -187,7 +209,8 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       } });
       const message = await tx.huRoomMessage.create({ data: { roomId: data.roomId, discussionId: discussion.id, authorId: actor.id, body: data.body } });
       await tx.huRoomMention.createMany({ data: data.mentionIds.map(userId => ({ messageId: message.id, roomId: data.roomId, userId })) });
-      return { value: { id: discussion.id }, notices: data.mentionIds.map(userId => ({ kind: 'mention', userId, roomId: data.roomId, documentId: data.documentId })) };
+      await notifyDiscussionMessage(tx, actor, data.roomId, discussion.id, data.mentionIds);
+      return { value: { id: discussion.id } };
     }
     case 'reply': {
       const data = z.object({ roomId: id, discussionId: id, body: z.string().trim().min(1).max(20000), mentionIds: ids.default([]), requestId: z.string().uuid() }).parse(input);
@@ -201,7 +224,8 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       }
       const message = await tx.huRoomMessage.create({ data: { id: data.requestId, discussionId: data.discussionId, roomId: data.roomId, authorId: actor.id, body: data.body } });
       await tx.huRoomMention.createMany({ data: data.mentionIds.map(userId => ({ messageId: message.id, roomId: data.roomId, userId })) });
-      return { value: { id: message.id }, notices: data.mentionIds.map(userId => ({ kind: 'mention', userId, roomId: data.roomId, documentId: discussion.documentId })) };
+      await notifyDiscussionMessage(tx, actor, data.roomId, discussion.id, data.mentionIds);
+      return { value: { id: message.id } };
     }
     case 'resolveDiscussion': {
       const data = z.object({ roomId: id, discussionId: id, resolved: z.boolean() }).parse(input);
@@ -213,13 +237,24 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       }
       return { value: { updated: true } };
     }
+    case 'setRoomNotifications': {
+      const data = z.object({ roomId: id, enabled: z.boolean() }).parse(input);
+      await roomContext(tx, actor, data.roomId);
+      const result = await tx.huRoomMembership.updateMany({ where: { roomId: data.roomId, userId: actor.id, revokedAt: null },
+        data: { notificationsMutedAt: data.enabled ? null : new Date() } });
+      if (!result.count) throw new HttpError(404, 'Membership not found.');
+      return { value: { enabled: data.enabled } };
+    }
     case 'startVisit': {
       const data = z.object({ roomId: id, visitId: z.string().uuid() }).parse(input);
       await roomContext(tx, actor, data.roomId);
       if (actor.admin) return { value: { id: null } };
       const existing = await tx.huRoomVisit.findUnique({ where: { id: data.visitId } });
       if (existing && (existing.userId !== actor.id || existing.roomId !== data.roomId)) throw new HttpError(409, 'Visit identifier already used.');
-      const visit = existing ?? await tx.huRoomVisit.create({ data: { id: data.visitId, roomId: data.roomId, teamId, userId: actor.id } });
+      if (existing) return { value: { id: existing.id } };
+      const firstVisit = !(await tx.huRoomVisit.count({ where: { roomId: data.roomId, userId: actor.id } }));
+      const visit = await tx.huRoomVisit.create({ data: { id: data.visitId, roomId: data.roomId, teamId, userId: actor.id } });
+      if (firstVisit) await notifyAdmins(tx, actor, data.roomId, 'ADMIN_FIRST_VISIT');
       return { value: { id: visit.id } };
     }
     case 'recordReading': {
@@ -276,16 +311,7 @@ export async function performAction(actor: Actor, input: Record<string, unknown>
   }
   let failedNotifications = 0;
   for (const notice of outcome.notices ?? []) {
-    try {
-      if (notice.kind === 'invite') await sendRoomInvite(notice.email, notice.roomName, notice.roomId);
-      else {
-        const user = await db.user.findUnique({ where: { id: notice.userId } });
-        if (!user?.email || !user.emailVerified || user.id === actor.id) continue;
-        const recipient = { id: user.id, email: user.email.toLowerCase(), admin: adminEmails().includes(user.email.toLowerCase()) };
-        await threadAccess(db, recipient, notice.roomId, notice.documentId);
-        await sendMail(user.email, 'You were mentioned in a HorseUp room', `A discussion in your HorseUp room mentions you. Sign in to read it:\n${appUrl()}/rooms/${notice.roomId}`);
-      }
-    } catch { failedNotifications++; }
+    try { await sendRoomInvite(notice.email, notice.roomName, notice.roomId); } catch { failedNotifications++; }
   }
   return { ...(outcome.value as object), ...(failedNotifications ? { warning: `${failedNotifications} email notification(s) could not be delivered. Invitations can be resent from Members.` } : {}) };
 }
@@ -307,11 +333,13 @@ async function publishUpload(actor: Actor, input: Record<string, unknown>) {
   await db.$transaction(async tx => {
     const saved = await tx.documentVersion.findUniqueOrThrow({ where: { id: version.id } });
     if (saved.huS3VersionId) return;
+    const before = await visibleDocuments(tx);
     const current = await tx.documentVersion.findFirst({ where: { documentId: version.documentId, isPrimary: true }, orderBy: { versionNumber: 'desc' } });
     if (current && current.versionNumber > version.versionNumber) throw new HttpError(409, 'A newer version has already been published.');
     await tx.documentVersion.updateMany({ where: { documentId: version.documentId, isPrimary: true }, data: { isPrimary: false } });
     await tx.documentVersion.update({ where: { id: version.id }, data: { isPrimary: true, numPages: data.pages, huS3VersionId: head.VersionId } });
     await tx.document.update({ where: { id: version.documentId }, data: { file: version.file, numPages: data.pages } });
+    await notifyDocumentChanges(tx, actor, before);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   return { documentId: version.documentId };
 }

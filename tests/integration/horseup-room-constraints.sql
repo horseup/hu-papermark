@@ -66,6 +66,21 @@ BEGIN
     UPDATE "HuRoomStage" SET position=-1 WHERE id='hu-test-stage';
     RAISE EXCEPTION 'Negative stage unexpectedly accepted';
   EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO "HuNotification" (id,"teamId","roomId","recipientEmail",kind) VALUES ('hu-test-notice-1','hu-test-team','hu-test-room-a','Investor@example.test','DOCUMENT_AVAILABLE');
+    RAISE EXCEPTION 'Unnormalized notification recipient unexpectedly accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO "HuNotification" (id,"teamId","roomId","recipientEmail",kind,"processedAt") VALUES ('hu-test-notice-2','hu-test-team','hu-test-room-a','investor@example.test','DOCUMENT_AVAILABLE',now());
+    RAISE EXCEPTION 'Processed notification without outcome unexpectedly accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO "HuNotification" (id,"teamId","roomId","recipientEmail",kind) VALUES ('hu-test-notice-3','hu-test-other','hu-test-room-a','investor@example.test','DOCUMENT_AVAILABLE');
+    RAISE EXCEPTION 'Cross-team notification unexpectedly accepted';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  INSERT INTO "HuNotification" (id,"teamId","roomId","recipientEmail",kind) VALUES ('hu-test-notice-4','hu-test-team','hu-test-room-b','investor@example.test','ACCESS_ENDED');
+  DELETE FROM "HuInvestorRoom" WHERE id='hu-test-room-b';
+  IF EXISTS (SELECT 1 FROM "HuNotification" WHERE id='hu-test-notice-4') THEN RAISE EXCEPTION 'Notification outlived its room'; END IF;
   RAISE NOTICE 'HorseUp database constraints passed';
 END $$;
 ROLLBACK;

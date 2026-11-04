@@ -4,6 +4,7 @@ import type { EmailConfig } from 'next-auth/providers/email';
 import { db } from './db';
 import { adminEmails, teamId } from './config';
 import { sendMail } from './mail';
+import { notifyAdmins } from './notifications';
 
 async function invited(email: string) {
   if (adminEmails().includes(email)) return true;
@@ -48,9 +49,13 @@ export const authOptions: NextAuthOptions = {
     async signIn({ user }) {
       if (!user.email) return;
       const email = user.email.trim().toLowerCase();
-      await db.huRoomMembership.updateMany({
-        where: { email, revokedAt: null, acceptedAt: null, room: { teamId, archivedAt: null } },
-        data: { userId: user.id, acceptedAt: new Date() },
+      await db.$transaction(async tx => {
+        const pending = await tx.huRoomMembership.findMany({
+          where: { email, revokedAt: null, acceptedAt: null, room: { teamId, archivedAt: null } }, select: { id: true, roomId: true },
+        });
+        if (!pending.length) return;
+        await tx.huRoomMembership.updateMany({ where: { id: { in: pending.map(m => m.id) } }, data: { userId: user.id, acceptedAt: new Date() } });
+        for (const membership of pending) await notifyAdmins(tx, { id: user.id, email }, membership.roomId, 'ADMIN_INVITE_ACCEPTED');
       });
       if (adminEmails().includes(email)) {
         await db.team.upsert({ where: { id: teamId }, update: {}, create: {

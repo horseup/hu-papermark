@@ -20,7 +20,8 @@ After applying the core schema and HorseUp migration to the disposable database,
 set `POSTGRES_PRISMA_URL` and `POSTGRES_PRISMA_URL_NON_POOLING` to its local URL,
 then run `node --test tests/room-actions.integration.cjs`. The runner refuses a
 non-local database or a database name without the `_test` suffix. Its randomly
-identified fixtures are removed afterward. It does not send email or access S3.
+identified fixtures are removed afterward. It does not send email (the mail
+transport is replaced by an in-memory stub) or access S3.
 
 The SQL constraint suite is `../tests/integration/horseup-room-constraints.sql`.
 Run it using `psql -v ON_ERROR_STOP=1`; fixtures are rolled back.

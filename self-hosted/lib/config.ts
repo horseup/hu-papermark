@@ -8,3 +8,12 @@ export function appUrl(): string {
   return new URL(value).origin;
 }
 export const MAX_PDF_BYTES = 100 * 1024 * 1024;
+/** Display name for notification emails; the address stays HORSEUP_EMAIL_FROM. */
+export const NOTIFICATION_SENDER_NAME = 'HorseUp Deal Room';
+export function investorReplyTo(): string {
+  return process.env.HORSEUP_INVESTOR_REPLY_TO || 'investors@horseup.de';
+}
+/** Quiet window: a recipient's batch is sent once no new event arrived for this long. */
+export function notificationQuietMs(): number { return Number(process.env.HORSEUP_NOTIFY_QUIET_MS) || 10 * 60 * 1000; }
+/** Upper bound so a steady stream of events cannot postpone a batch forever. */
+export function notificationMaxWaitMs(): number { return Number(process.env.HORSEUP_NOTIFY_MAX_WAIT_MS) || 60 * 60 * 1000; }

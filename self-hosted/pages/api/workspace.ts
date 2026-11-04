@@ -54,10 +54,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         readings: { select: { documentId: true, documentVersionId: true, pageNumber: true, visibleMs: true } },
       },
     }) : [];
+    const own = actor.admin ? null : await db.huRoomMembership.findFirst({ where: { roomId, userId: actor.id, revokedAt: null }, select: { notificationsMutedAt: true } });
     const threads = discussions.map(({ document, ...d }) => ({ ...d, documentRemoved: Boolean(document?.huDeletedAt) }));
     return res.json(jsonSafe({ actor, stages, rooms, library, room: {
       id: state.room.id, name: state.room.name, stageId: state.room.stageId, archivedAt: state.room.archivedAt,
       selectedDocumentIds: actor.admin ? state.room.documents.map(d => d.documentId) : ids,
+      notificationsEnabled: own ? !own.notificationsMutedAt : null,
     }, documents: visible, discussions: threads, members, administrators: administrators.map(a => a.user), visits }));
   } catch (error) { return sendError(res, error); }
 }
