@@ -46,6 +46,7 @@ model HuInvestorRoom {
   memberships HuRoomMembership[]
   discussions HuRoomDiscussion[]
   visits      HuRoomVisit[]
+  notifications HuNotification[]
 
   @@unique([id, teamId])
   @@index([teamId, archivedAt, createdAt])
@@ -75,6 +76,8 @@ model HuRoomMembership {
   invitedAt   DateTime @default(now())
   acceptedAt  DateTime?
   revokedAt   DateTime?
+  // Set when the investor opts out of notification emails for this room.
+  notificationsMutedAt DateTime?
   updatedAt   DateTime @updatedAt
   room        HuInvestorRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
   user        User? @relation("HuRoomMember", fields: [userId], references: [id], onDelete: Restrict)
@@ -207,4 +210,41 @@ model HuPageReading {
   @@index([visitId, teamId])
   @@index([documentId, teamId])
   @@index([documentVersionId, documentId])
+}
+
+enum HuNotificationKind {
+  DOCUMENT_AVAILABLE
+  DOCUMENT_UPDATED
+  THREAD_REPLY
+  MENTION
+  ACCESS_ENDED
+  ADMIN_MESSAGE
+  ADMIN_INVITE_ACCEPTED
+  ADMIN_FIRST_VISIT
+}
+
+// Notification outbox. Rows are written in the same transaction as the change
+// and sent in debounced batches; access is re-checked when the batch is sent.
+// No foreign keys to documents or discussions: a vanished target simply skips.
+model HuNotification {
+  id                String @id @default(cuid())
+  teamId            String
+  roomId            String
+  // Normalized lowercase email; the migration enforces normalization.
+  recipientEmail    String
+  kind              HuNotificationKind
+  actorId           String?
+  documentId        String?
+  documentVersionId String?
+  discussionId      String?
+  createdAt         DateTime @default(now())
+  claimedAt         DateTime?
+  attempts          Int @default(0)
+  processedAt       DateTime?
+  // sent | skipped | failed
+  outcome           String?
+  room              HuInvestorRoom @relation(fields: [roomId, teamId], references: [id, teamId], onDelete: Cascade)
+
+  @@index([teamId, processedAt, recipientEmail, createdAt])
+  @@index([roomId, teamId])
 }

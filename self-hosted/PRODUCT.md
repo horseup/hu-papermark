@@ -29,6 +29,7 @@ existing discussions preserve the document version/page they reference.
 - Multiple invitees, invitations by email, later membership additions/removal.
 - NextAuth email-link login, Resend email, no Clerk and no Drive integration.
 - Timestamped discussions, stable order, resolve/reopen history, room-scoped mentions.
+- Debounced notification emails (new documents, new versions, replies, mentions, access ended; admin activity digest) with a per-room opt-out.
 - Room visits, viewed pages and estimated visible time, available to administrators.
 - Dedicated self-hosted entrypoint in horseup/hu-papermark; no enterprise runtime.
 - PostgreSQL on the AWS host, private versioned EU S3 storage, Databasus backups.
