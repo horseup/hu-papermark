@@ -23,7 +23,7 @@ function useToggle() {
 }
 
 // Centered under the anchor's end, kept away from the page edges.
-const place = (at: Point) => ({ left: `${Math.min(0.8, Math.max(0.2, at.left)) * 100}%`, top: `calc(${Math.min(at.top, 1) * 100}% + 8px)` });
+const place = (at: Point) => ({ left: `clamp(min(150px, 50%), ${Math.min(1, Math.max(0, at.left)) * 100}%, max(calc(100% - 150px), 50%))`, top: `calc(${Math.min(at.top, 1) * 100}% + 8px)` });
 
 export function CommentBubble({ at, onComment }: { at: Point; onComment: () => void }) {
   return <div className="inline-pop bubble" style={place(at)}><button type="button" onMouseDown={event => event.preventDefault()} onClick={onComment}>Comment</button></div>;
