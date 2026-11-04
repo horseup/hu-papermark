@@ -9,20 +9,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'GET') return res.status(405).end();
   try {
     const actor = await actorFor(req, res);
-    const stages = await db.huRoomStage.findMany({ where: { teamId }, orderBy: { position: 'asc' } });
+    const stages = await db.huRoomStage.findMany({ where: { teamId }, orderBy: { position: 'asc' }, include: actor.admin ? {
+      _count: { select: { rooms: true, documentRules: { where: { document: { huDeletedAt: null } } } } },
+    } : undefined });
     const rooms = await db.huInvestorRoom.findMany({
       where: { teamId, ...(actor.admin ? {} : { archivedAt: null, memberships: { some: { email: actor.email, revokedAt: null } } }) },
       select: { id: true, name: true, stageId: true, archivedAt: true, createdAt: true }, orderBy: { createdAt: 'desc' },
     });
-    const library = actor.admin ? await db.document.findMany({ where: { teamId }, select: {
+    const library = actor.admin ? await db.document.findMany({ where: { teamId, huDeletedAt: null }, select: {
       id: true, name: true, updatedAt: true, huAccessRule: { select: { minimumStageId: true } },
+      _count: { select: { huRoomSelections: true } },
       versions: { where: { isPrimary: true }, select: { id: true, versionNumber: true, fileSize: true, numPages: true } },
     }, orderBy: { updatedAt: 'desc' } }) : [];
 
     const roomId = typeof req.query.roomId === 'string' ? req.query.roomId : null;
     if (!roomId) return res.json(jsonSafe({ actor, stages, rooms, library }));
     const state = await roomContext(db, actor, roomId);
-    const documents = await db.document.findMany({ where: { teamId, huRoomSelections: { some: { roomId } } }, select: {
+    const documents = await db.document.findMany({ where: { teamId, huDeletedAt: null, huRoomSelections: { some: { roomId } } }, select: {
       id: true, name: true, huAccessRule: { select: { minimumStageId: true } },
       versions: { where: { isPrimary: true }, orderBy: { versionNumber: 'desc' }, take: 1,
         select: { id: true, versionNumber: true, numPages: true, fileSize: true, createdAt: true } },
@@ -31,8 +34,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { id: d.id, teamId, minimumStageId: d.huAccessRule?.minimumStageId ?? null }, { roomId, documentId: d.id })));
     const ids = visible.map(d => d.id);
     const discussions = await db.huRoomDiscussion.findMany({
-      where: { roomId, OR: [{ documentId: null }, { documentId: { in: ids } }] },
+      where: { roomId, OR: [{ documentId: null }, { documentId: { in: ids } }, { document: { huDeletedAt: { not: null } } }] },
       select: { id: true, title: true, documentId: true, documentVersionId: true, pageNumber: true,
+        document: { select: { huDeletedAt: true } },
         createdAt: true, resolvedAt: true, createdById: true,
         messages: { orderBy: [{ createdAt: 'asc' }, { sequence: 'asc' }], select: {
           id: true, body: true, createdAt: true, editedAt: true, sequence: true,
@@ -49,9 +53,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         readings: { select: { documentId: true, documentVersionId: true, pageNumber: true, visibleMs: true } },
       },
     }) : [];
+    const threads = discussions.map(({ document, ...d }) => ({ ...d, documentRemoved: Boolean(document?.huDeletedAt) }));
     return res.json(jsonSafe({ actor, stages, rooms, library, room: {
       id: state.room.id, name: state.room.name, stageId: state.room.stageId, archivedAt: state.room.archivedAt,
       selectedDocumentIds: actor.admin ? state.room.documents.map(d => d.documentId) : ids,
-    }, documents: visible, discussions, members, administrators: administrators.map(a => a.user), visits }));
+    }, documents: visible, discussions: threads, members, administrators: administrators.map(a => a.user), visits }));
   } catch (error) { return sendError(res, error); }
 }

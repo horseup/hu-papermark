@@ -3,6 +3,9 @@ model Document {
   huRoomSelections HuRoomDocument[]
   huDiscussions HuRoomDiscussion[]
   huReadings HuPageReading[]
+  // HorseUp deal room soft delete: hidden from the library and every room.
+  huDeletedAt DateTime?
+  huDeletedById String?
   id                   String              @id @default(cuid())
   name                 String
   description          String?
@@ -47,6 +50,7 @@ model Document {
   @@index([teamId, folderId]) // Performance optimization for document filtering by team and folder
   @@index([teamId, name]) // Performance optimization for document search by name
   @@index([teamId, hiddenInAllDocuments]) // Performance optimization for filtering hidden documents
+  @@index([teamId, huDeletedAt])
 }
 
 model DocumentVersion {
