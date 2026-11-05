@@ -87,8 +87,10 @@ function configuration(): Configuration {
       return { accountId: user.id, claims: async () => ({ sub: user.id, email: user.email, email_verified: true }) };
     },
     claims: { email: ['email', 'email_verified'], openid: ['sub'] },
-    // OpenID scopes only. MCP_SCOPE belongs to the resource server (getResourceServerInfo below).
-    scopes: ['openid', 'email', 'offline_access'],
+    // MCP clients such as Claude register with scope=dealroom:read, and registration only
+    // accepts scopes listed here. The consent handler therefore grants it as an OpenID
+    // scope too; the resource server (getResourceServerInfo) puts it on the access token.
+    scopes: ['openid', 'email', 'offline_access', MCP_SCOPE],
     jwks: { keys: [signingKey()] },
     cookies: { keys: [derive('cookie-key-v1').toString('base64url')], long: { signed: true }, short: { signed: true } },
     clientDefaults: { grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none', id_token_signed_response_alg: 'EdDSA' },
