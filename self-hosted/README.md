@@ -1,14 +1,13 @@
 # HorseUp self-hosted entrypoint
 
-This directory is the approved dedicated application entrypoint in the
-`horseup/hu-papermark` fork. Next.js builds only this directory's routes, not the
-upstream `app`, `pages`, middleware, or enterprise routes. The core Prisma models
-and independently implemented `lib/horseup/rooms/access-policy.ts` are shared.
-The room actions and discussions are independent implementations.
+This directory is the deal room application in `horseup/hu-papermark`. The
+original Papermark app was removed from the repository on 2026-11-05. The Prisma
+schema in `../prisma/schema` and the independently implemented
+`../lib/horseup/rooms/access-policy.ts` live outside this directory.
 
 ## Current status
 
-Deployed at https://dealroom.horseup.de. See [deployment record](DEPLOYMENT.md) for the pinned source, completed checks, backup restore evidence and remaining operational checks. The isolated runtime dependency audit reports zero known advisories as checked on 2026-10-26; unused upstream root dependencies are outside this result.
+Deployed at https://dealroom.horseup.de. See [deployment record](DEPLOYMENT.md) for the pinned source, completed checks, backup restore evidence and remaining operational checks. This directory's `package-lock.json` is the only dependency manifest in the repository.
 
 ## Members, downloads and the MCP connector
 
