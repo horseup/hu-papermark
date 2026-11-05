@@ -105,12 +105,29 @@ function unsubscribeSignature(membershipId: string) {
 export function unsubscribeUrl(membershipId: string) {
   return `${appUrl()}/unsubscribe?m=${encodeURIComponent(membershipId)}&t=${unsubscribeSignature(membershipId)}`;
 }
-export async function unsubscribe(membershipId: string, token: string) {
+function validOptOutToken(membershipId: string, token: string) {
   const expected = Buffer.from(unsubscribeSignature(membershipId));
   const given = Buffer.from(token);
-  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return false;
-  await db.huRoomMembership.updateMany({ where: { id: membershipId, notificationsMutedAt: null, room: { teamId } }, data: { notificationsMutedAt: new Date() } });
-  return true;
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+export type OptOutStatus = { room: string; roomId: string; subscribed: boolean };
+/** What the opt-out page shows. Null when the token is wrong or the membership no longer exists. */
+export async function optOutStatus(membershipId: string, token: string): Promise<OptOutStatus | null> {
+  if (!validOptOutToken(membershipId, token)) return null;
+  const membership = await db.huRoomMembership.findFirst({ where: { id: membershipId, room: { teamId } }, include: { room: { select: { id: true, name: true } } } });
+  return membership ? { room: membership.room.name, roomId: membership.room.id, subscribed: !membership.notificationsMutedAt } : null;
+}
+/** Turns notification emails for one membership off or back on. Token-authenticated, no session needed. */
+export async function setOptOut(membershipId: string, token: string, subscribed: boolean): Promise<OptOutStatus | null> {
+  if (!validOptOutToken(membershipId, token)) return null;
+  await db.huRoomMembership.updateMany({
+    where: { id: membershipId, room: { teamId }, notificationsMutedAt: subscribed ? { not: null } : null },
+    data: { notificationsMutedAt: subscribed ? null : new Date() },
+  });
+  return optOutStatus(membershipId, token);
+}
+export async function unsubscribe(membershipId: string, token: string) {
+  return (await setOptOut(membershipId, token, false)) !== null;
 }
 
 // ---- Flushing ------------------------------------------------------------
