@@ -27,9 +27,10 @@ export const link = (text: string, url: string): Section => ({ html: `<p style="
 export const small = (html: string): Section => ({ html: `<p style="margin: 0 0 8px; font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.5; color: #9CA3AF; text-align: center;">${html}</p>` });
 
 /** Hidden first line of the body: mail clients show it after the subject in the inbox list.
- * The zero-width padding keeps the visible body text out of that preview. */
+ * Gmail collapses plain &zwnj;&nbsp; runs, so the padding also uses the combining grapheme joiner (&#847;),
+ * which keeps the logo's alt text and the body out of short previews. */
 export function preheaderHtml(text: string) {
-  return `<div style="display: none; font-size: 1px; color: #F9F4F2; line-height: 1px; max-height: 0; max-width: 0; opacity: 0; overflow: hidden; mso-hide: all;">${escapeHtml(text)}${'&zwnj;&nbsp;'.repeat(90)}</div>`;
+  return `<div style="display: none; font-size: 1px; color: #F9F4F2; line-height: 1px; max-height: 0; max-width: 0; opacity: 0; overflow: hidden; mso-hide: all;">${escapeHtml(text)}${'&#847;&zwnj;&nbsp;'.repeat(150)}</div>`;
 }
 
 export function renderEmail(params: { title: string; preheader: string; sections: Section[]; cta?: { label: string; url: string }; afterCta?: Section[]; footerNote?: string }) {
