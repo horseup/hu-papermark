@@ -1,12 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { action } from '../lib/client';
 import type { RoomData } from '../lib/room-types';
 export function RoomSettings({ data, refresh }: { data: RoomData; refresh: () => Promise<void> }) {
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  // Remember whether the panel is open per room, so saves, the 30-second refresh and page reloads don't collapse it.
+  const storageKey = `hu-room-settings-open:${data.room.id}`;
+  const [open, setOpen] = useState(false);
+  useEffect(() => { try { setOpen(window.sessionStorage.getItem(storageKey) === '1'); } catch { /* storage unavailable */ } }, [storageKey]);
+  function toggle(next: boolean) { setOpen(next); try { window.sessionStorage.setItem(storageKey, next ? '1' : '0'); } catch { /* storage unavailable */ } }
   async function run(name: string, values: Record<string, unknown>) { setBusy(true); setError(''); try { const result = await action(name, { roomId: data.room.id, ...values }); if (result.warning) setError(String(result.warning)); await refresh(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); } }
-  return <details className="editor"><summary>Manage access and view activity</summary><div className="settings-grid"><section><h2>Room access</h2>
+  return <details className="editor" open={open} onToggle={e => { const next = (e.currentTarget as HTMLDetailsElement).open; if (next !== open) toggle(next); }}><summary>Manage access and view activity</summary><div className="settings-grid"><section><h2>Room access</h2>
     <label>Current stage<select disabled={busy} value={data.room.stageId} onChange={e => run('setRoomStage', { stageId: e.target.value })}>{data.stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-    <form onSubmit={e => { e.preventDefault(); run('setRoomDocuments', { documentIds: new FormData(e.currentTarget).getAll('documents') }); }}><fieldset><legend>Selected documents</legend>{data.library.map(d => <label className="check" key={d.id}><input type="checkbox" name="documents" value={d.id} defaultChecked={data.room.selectedDocumentIds.includes(d.id)} />{d.name}</label>)}</fieldset><button disabled={busy}>Save document selection</button></form>
+    <form key={data.room.selectedDocumentIds.join(',')} onSubmit={e => { e.preventDefault(); run('setRoomDocuments', { documentIds: new FormData(e.currentTarget).getAll('documents') }); }}><fieldset><legend>Selected documents</legend>{data.library.map(d => <label className="check" key={d.id}><input type="checkbox" name="documents" value={d.id} defaultChecked={data.room.selectedDocumentIds.includes(d.id)} />{d.name}</label>)}</fieldset><button disabled={busy}>Save document selection</button></form>
     <p><button className="quiet" disabled={busy} onClick={() => run('archiveRoom', { archived: !data.room.archivedAt })}>{data.room.archivedAt ? 'Reopen room' : 'Archive room and revoke access'}</button></p>
   </section><section><h2>Members</h2><form onSubmit={e => { e.preventDefault(); run('invite', { emails: String(new FormData(e.currentTarget).get('emails')).split(/[\s,;]+/).filter(Boolean) }); }}><label>Invite email addresses<textarea name="emails" required placeholder="Separate addresses with commas" /></label><button disabled={busy || Boolean(data.room.archivedAt)}>Send invitations</button></form>
     {data.members.map(m => <div className="member" key={m.id}><span>{m.email}<small>{m.revokedAt ? 'Removed' : m.acceptedAt ? 'Joined' : 'Invited'}</small></span>{!m.revokedAt && <div>{!m.acceptedAt && <button className="quiet" disabled={busy} onClick={() => run('invite', { emails: [m.email] })}>Resend</button>}<button className="quiet" disabled={busy} onClick={() => run('revokeMember', { membershipId: m.id })}>Remove</button></div>}</div>)}

@@ -43,7 +43,7 @@ const emails = {
     { name: 'SYNTHETIC Fund B', url: `${app}/rooms/room2`, lines: ['other@example.test accepted the invitation'] }]),
 };
 
-const preheaderOf = html => /<div style="display: none;[^"]*">([^<&]*(?:&(?!zwnj;)[^<&]*)*)/.exec(html)[1]
+const preheaderOf = html => /<div style="display: none;[^"]*">([^<&]*(?:&(?!zwnj;|#847;)[^<&]*)*)/.exec(html)[1]
   .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 if (process.env.EMAIL_PREVIEW_DIR) {
@@ -74,7 +74,7 @@ test('every HTML email starts with a hidden preheader that adds to the subject',
     assert.equal(preheaderOf(item.html), expected[name], name);
     const body = item.html.slice(item.html.indexOf('<body'));
     assert.match(body, /^<body[^>]*>\s*<div style="display: none;[^"]*max-height: 0;[^"]*overflow: hidden; mso-hide: all;">/, name);
-    assert.ok(body.includes('&zwnj;&nbsp;'.repeat(20)), name);
+    assert.ok(body.includes('&#847;&zwnj;&nbsp;'.repeat(20)), name);
     assert.ok(!item.text.includes(expected[name]) || name === 'sign-in', `${name}: text part stays unchanged`);
   }
   const mixed = investorUpdateEmail([{ kind: 'ended', name: 'A' }, { kind: 'updates', name: 'B', url: `${app}/rooms/b`, added: ['Deck'], updated: [], discussions: [] }]);
