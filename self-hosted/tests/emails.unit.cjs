@@ -99,6 +99,7 @@ test('sign-in, invitation and notifications all send as "HorseUp Deal Room" from
 });
 
 test('plain-text parts are unchanged from the text-only emails', () => {
+  assert.equal(emails['sign-in'].subject, 'Your HorseUp Deal Room sign-in link');
   assert.equal(emails['sign-in'].text, `Use this personal link to sign in:\n\n${signInUrl}\n\nIt expires in 15 minutes and can be used once. If you did not request it, you can ignore this email.`);
   assert.equal(emails.invitation.subject, 'Your invitation to SYNTHETIC Fund A');
   assert.equal(emails.invitation.text, `You have been invited to SYNTHETIC Fund A in the HorseUp deal room.\n\nOpen ${app}/rooms/room1 and sign in with this email address.\n\nThis invitation is personal. Access can be revoked by the room administrators.`);
