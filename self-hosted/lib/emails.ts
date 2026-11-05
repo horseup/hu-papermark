@@ -6,7 +6,7 @@ export type Email = { subject: string; text: string; html: string };
 
 export function signInEmail(url: string): Email {
   return {
-    subject: 'Sign in to HorseUp deal room',
+    subject: 'Your HorseUp Deal Room sign-in link',
     text: `Use this personal link to sign in:\n\n${url}\n\nIt expires in 15 minutes and can be used once. If you did not request it, you can ignore this email.`,
     html: renderEmail({
       title: 'Sign in to your deal room',
