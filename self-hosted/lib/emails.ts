@@ -10,6 +10,7 @@ export function signInEmail(url: string): Email {
     text: `Use this personal link to sign in:\n\n${url}\n\nIt expires in 15 minutes and can be used once. If you did not request it, you can ignore this email.`,
     html: renderEmail({
       title: 'Sign in to your deal room',
+      preheader: 'Your personal link is valid for 15 minutes.',
       sections: [paragraph('Use this personal link to sign in.')],
       cta: { label: 'Sign in', url },
       afterCta: [paragraph('It expires in 15 minutes and can be used once. If you did not request it, you can ignore this email.'),
@@ -24,6 +25,7 @@ export function invitationEmail(roomName: string, roomUrl: string): Email {
     text: `You have been invited to ${roomName} in the HorseUp deal room.\n\nOpen ${roomUrl} and sign in with this email address.\n\nThis invitation is personal. Access can be revoked by the room administrators.`,
     html: renderEmail({
       title: `Your invitation to ${roomName}`,
+      preheader: 'Open the room with the email address this was sent to.',
       sections: [paragraph(`You have been invited to ${roomName} in the HorseUp deal room.`), paragraph('Open the room and sign in with this email address.')],
       cta: { label: 'Open the room', url: roomUrl },
       footerNote: 'This invitation is personal. Access can be revoked by the room administrators.',
@@ -33,7 +35,33 @@ export function invitationEmail(roomName: string, roomUrl: string): Email {
 
 export type InvestorRoomUpdate =
   | { kind: 'ended'; name: string }
-  | { kind: 'updates'; name: string; url: string; added: string[]; updated: string[]; discussions: string[]; optOutUrl?: string };
+  | { kind: 'updates'; name: string; url: string; added: string[]; updated: string[]; discussions: DiscussionUpdate[]; optOutUrl?: string };
+/** One line per discussion: replies count THREAD_REPLY notices; a mention wins over replies. */
+export type DiscussionUpdate = { replies: number; mentioned: boolean; topic: string };
+
+export function discussionLine(d: DiscussionUpdate) {
+  const what = d.mentioned ? 'You were mentioned in' : d.replies > 1 ? `${d.replies} new replies in` : 'New reply in';
+  return `${what} ${d.topic}`;
+}
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** Inbox preview line: what changed, as counts, so it adds to the subject. */
+export function investorPreheader(rooms: InvestorRoomUpdate[]) {
+  const updates = rooms.filter((r): r is Extract<InvestorRoomUpdate, { kind: 'updates' }> => r.kind === 'updates');
+  const ended = rooms.length - updates.length;
+  const sum = (pick: (r: (typeof updates)[number]) => number) => updates.reduce((total, r) => total + pick(r), 0);
+  const added = sum(r => r.added.length), updated = sum(r => r.updated.length);
+  const replies = sum(r => r.discussions.filter(d => !d.mentioned).reduce((n, d) => n + Math.max(1, d.replies), 0));
+  const mentions = sum(r => r.discussions.filter(d => d.mentioned).length);
+  const parts = [
+    added ? count(added, 'new document', 'new documents') : '',
+    updated ? count(updated, 'updated document', 'updated documents') : '',
+    replies ? count(replies, 'reply', 'replies') : '',
+    mentions ? count(mentions, 'mention', 'mentions') : '',
+  ].filter(Boolean);
+  if (ended) parts.push(updates.length ? `access ended in ${count(ended, 'room', 'rooms')}` : 'Reply to this email if you have questions.');
+  return parts.join(', ');
+}
 
 export function investorUpdateEmail(rooms: InvestorRoomUpdate[]): Email {
   const updates = rooms.filter((r): r is Extract<InvestorRoomUpdate, { kind: 'updates' }> => r.kind === 'updates');
@@ -51,7 +79,7 @@ export function investorUpdateEmail(rooms: InvestorRoomUpdate[]): Email {
     const lines = [`"${room.name}"`];
     if (room.added.length) lines.push('', 'New documents available:', ...room.added.map(n => `- ${n}`));
     if (room.updated.length) lines.push('', 'Updated documents:', ...room.updated.map(n => `- ${n}`));
-    if (room.discussions.length) lines.push('', 'Discussions:', ...room.discussions.map(n => `- ${n}`));
+    if (room.discussions.length) lines.push('', 'Discussions:', ...room.discussions.map(d => `- ${discussionLine(d)}`));
     lines.push('', `Open the room: ${room.url}`);
     return lines.join('\n');
   });
@@ -65,11 +93,12 @@ export function investorUpdateEmail(rooms: InvestorRoomUpdate[]): Email {
     if (!single) sections.push(heading(room.name));
     if (room.added.length) sections.push(label('New documents available:'), list(room.added));
     if (room.updated.length) sections.push(label('Updated documents:'), list(room.updated));
-    if (room.discussions.length) sections.push(label('Discussions:'), list(room.discussions));
+    if (room.discussions.length) sections.push(label('Discussions:'), list(room.discussions.map(discussionLine)));
     if (!single) sections.push(link(`Open ${room.name}`, room.url));
   }
   const html = renderEmail({
     title: updates.length ? (single ? `Updates in ${updates[0].name}` : 'Updates in your deal rooms') : 'Your deal room access has ended',
+    preheader: investorPreheader(rooms),
     sections,
     cta: single ? { label: 'Open the room', url: updates[0].url } : undefined,
     afterCta: optOuts.length ? [small(escapeHtml(footerNote)), ...optOuts.map(o =>
@@ -90,5 +119,8 @@ export function adminActivityEmail(rooms: AdminRoomActivity[]): Email {
     sections.push(heading(room.name), list(room.lines));
     if (!single) sections.push(link(`Open ${room.name}`, room.url));
   }
-  return { subject, text, html: renderEmail({ title: 'Investor activity', sections, cta: single ? { label: 'Open the room', url: rooms[0].url } : undefined }) };
+  const total = rooms.reduce((n, r) => n + r.lines.length, 0);
+  const first = rooms.find(r => r.lines.length);
+  const preheader = first ? `${rooms.length > 1 ? `${first.name}: ` : ''}${first.lines[0]}${total > 1 ? ` (+${total - 1} more)` : ''}` : 'Investor activity in the HorseUp deal room';
+  return { subject, text, html: renderEmail({ title: 'Investor activity', preheader, sections, cta: single ? { label: 'Open the room', url: rooms[0].url } : undefined }) };
 }
