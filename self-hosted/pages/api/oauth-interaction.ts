@@ -35,8 +35,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const next = grant ?? new provider.Grant({ accountId: user.id, clientId });
     if (grant && grant.accountId !== user.id) return res.status(403).send('This connection belongs to another account.');
     const requested = String(details.params.scope ?? '').split(' ').filter(Boolean);
-    const oidc = requested.filter(s => ['openid', 'email', 'offline_access'].includes(s));
-    if (oidc.length) next.addOIDCScope(oidc.join(' '));
+    const oidc = [...new Set([...requested.filter(s => ['openid', 'email', 'offline_access'].includes(s)), MCP_SCOPE])];
+    next.addOIDCScope(oidc.join(' '));
     next.addResourceScope(mcpResource(), MCP_SCOPE);
     const grantId = await next.save();
     await provider.interactionFinished(req, res, { login: { accountId: user.id }, consent: { grantId } }, { mergeWithLastSubmission: false });
