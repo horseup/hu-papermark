@@ -10,6 +10,49 @@ The room actions and discussions are independent implementations.
 
 Deployed at https://dealroom.horseup.de. See [deployment record](DEPLOYMENT.md) for the pinned source, completed checks, backup restore evidence and remaining operational checks. The isolated runtime dependency audit reports zero known advisories as checked on 2026-10-26; unused upstream root dependencies are outside this result.
 
+## Members, downloads and the MCP connector
+
+**Members.** Accepted investors can invite colleagues to their own room (10 per
+request, 25 open memberships per room), resend or withdraw invitations, remove
+any investor in the room, and leave. They can never remove administrators, who
+are not memberships. Someone an administrator removed can only be re-invited by
+an administrator. Investor invitations and removals appear in the admin digest.
+
+**Downloads.** `GET /api/download?roomId=…&documentId=…` returns one PDF and
+`?roomId=…&all=1` a ZIP (stored, not recompressed) of every document the user
+can read. Access is checked per request with the same policy as the viewer.
+Investor downloads are recorded in `HuRoomDownload` and listed under room
+activity; administrators' own downloads are not recorded.
+
+**MCP connector.** `https://dealroom.horseup.de/mcp` (Streamable HTTP,
+stateless, JSON). Tools: `list_rooms`, `list_documents`,
+`get_document_download_link` and `get_all_documents_download_link`. It cannot
+read discussions or change anything. Authentication is OAuth 2.1 through
+`oidc-provider`: open dynamic client registration (rate limited per IP),
+PKCE required, resource indicator `…/mcp`, scope `dealroom:read`, opaque
+access tokens (1 hour) and rotating refresh tokens (30 days). The user signs in
+with the normal email link and approves the assistant on
+`/oauth/interaction/:uid`; only invited or admin emails can approve.
+Assistants are listed and disconnected on `/connect`. Each tool call
+re-evaluates current membership. Download links are HMAC-signed, bound to the
+user, room and document, valid for 10 minutes, and re-check access when used.
+
+Metadata: `/.well-known/oauth-protected-resource/mcp` (RFC 9728),
+`/.well-known/oauth-authorization-server` and
+`/.well-known/openid-configuration`. OAuth state lives in `HuOAuthRecord`.
+The ID-token signing key and cookie keys are derived from `NEXTAUTH_SECRET`
+with HKDF, so no new secret is needed; rotating `NEXTAUTH_SECRET` ends every
+connector session.
+
+Known advisory: `archiver@8` pulls `minimatch@10` (GHSA-g3hv-75wg-m249,
+moderate) through `readdir-glob`. Only archiver's glob helpers reach it; this
+app only appends S3 streams.
+
+The database suite for these features is
+`node --test tests/members-downloads.integration.cjs`, with the same
+disposable-database requirements as below. Run the two database suites one at a time
+(`--test-concurrency=1`); in parallel their serializable transactions conflict.
+
 ## Local database verification
 
 Use Node 24 and a disposable local PostgreSQL database. Generate the client with

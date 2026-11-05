@@ -46,6 +46,8 @@ model User {
   huRoomMentions HuRoomMention[] @relation("HuMentionRecipient")
   huDiscussionEvents HuRoomDiscussionEvent[] @relation("HuDiscussionActor")
   huRoomVisits HuRoomVisit[] @relation("HuRoomVisitor")
+  huRoomRemovals HuRoomMembership[] @relation("HuRoomRemover")
+  huRoomDownloads HuRoomDownload[] @relation("HuRoomDownloader")
   id             String     @id @default(cuid())
   name           String?
   email          String?    @unique

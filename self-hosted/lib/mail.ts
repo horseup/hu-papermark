@@ -29,7 +29,7 @@ export async function sendMail(to: string, subject: string, text: string, option
   await transport({ from, to, subject, text, ...(options.html ? { html: options.html } : {}), ...(options.replyTo ? { replyTo: options.replyTo } : {}), ...(options.headers ? { headers: options.headers } : {}) });
 }
 
-export async function sendRoomInvite(email: string, roomName: string, roomId: string) {
-  const mail = invitationEmail(roomName, `${appUrl()}/rooms/${encodeURIComponent(roomId)}`);
+export async function sendRoomInvite(email: string, roomName: string, roomId: string, invitedBy?: string) {
+  const mail = invitationEmail(roomName, `${appUrl()}/rooms/${encodeURIComponent(roomId)}`, invitedBy);
   await sendMail(email, mail.subject, mail.text, { html: mail.html });
 }

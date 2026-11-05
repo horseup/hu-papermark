@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { useSession } from 'next-auth/react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import { Download } from 'lucide-react';
 import { action, request } from '../../lib/client';
 import type { Anchor, Discussion, RoomData } from '../../lib/room-types';
 import { CommentBubble, InlineComposer, InlineThread } from '../../components/InlineComments';
@@ -10,6 +11,7 @@ import { anchorPoint, type Point } from '../../lib/anchor';
 import { Shell } from '../../components/Shell';
 import { RoomSettings } from '../../components/RoomSettings';
 import { Discussions } from '../../components/Discussions';
+import { RoomMembers } from '../../components/RoomMembers';
 const PdfViewer = dynamic(() => import('../../components/PdfViewer'), { ssr: false });
 export default function InvestorRoom() {
   const router = useRouter(); const { status } = useSession(); const id = typeof router.query.id === 'string' ? router.query.id : '';
@@ -60,8 +62,10 @@ export default function InvestorRoom() {
       {data.actor.admin && <RoomSettings data={data} refresh={refresh} />}
       {!data.actor.admin && data.room.notificationsEnabled !== null && <label className="check"><input type="checkbox" checked={data.room.notificationsEnabled}
         onChange={e => action('setRoomNotifications', { roomId: data.room.id, enabled: e.target.checked }).then(refresh).catch(err => setError(err.message))} />Email me about new documents and replies in this room</label>}
+      {!data.actor.admin && <RoomMembers data={data} refresh={refresh} />}
       <nav className="mobile-tabs" aria-label="Room sections">{['documents', 'viewer', 'discussions'].map(name => <button key={name} className={tab === name ? '' : 'quiet'} aria-pressed={tab === name} onClick={() => setTab(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}</nav>
-      <div className={`room-grid show-${tab}`}><nav className="documents" aria-label="Room documents"><h2>Documents</h2>{data.documents.map(d => <button className={selection?.documentId === d.id ? 'selected document-link' : 'quiet document-link'} key={d.id} onClick={() => { setSelection({ documentId: d.id, versionId: d.versions[0].id, page: 1 }); setTab('viewer'); }}>{d.name}<small>Version {d.versions[0].versionNumber}</small></button>)}{!data.documents.length && <p>No documents are available at this stage yet.</p>}</nav>
+      <div className={`room-grid show-${tab}`}><nav className="documents" aria-label="Room documents"><h2>Documents</h2>{data.documents.map(d => <div className="document-row" key={d.id}><button className={selection?.documentId === d.id ? 'selected document-link' : 'quiet document-link'} onClick={() => { setSelection({ documentId: d.id, versionId: d.versions[0].id, page: 1 }); setTab('viewer'); }}>{d.name}<small>Version {d.versions[0].versionNumber}</small></button><a className="download-link" href={`/api/download?roomId=${encodeURIComponent(data.room.id)}&documentId=${encodeURIComponent(d.id)}`} download aria-label={`Download ${d.name}`} title="Download PDF"><Download size={16} aria-hidden="true" /></a></div>)}{!data.documents.length && <p>No documents are available at this stage yet.</p>}
+        {data.documents.length > 1 && <a className="button quiet download-all" href={`/api/download?roomId=${encodeURIComponent(data.room.id)}&all=1`} download>Download all ({data.documents.length}) as ZIP</a>}</nav>
       <section className="viewer"><h2>{data.documents.find(d => d.id === selection?.documentId)?.name || 'Document preview'}</h2>{selection?.historical && <p className="historical">Showing the version referenced by this discussion. Select the document from the list to return to the latest version.</p>}
       {selection ? <PdfViewer key={`${selection.documentId}:${selection.versionId}`} {...selection} roomId={id} visitId={visitId} onPage={page => setSelection(value => value && { ...value, page })}
         highlights={pageThreads.filter(d => !d.resolvedAt || openThread?.id === d.id).map(d => ({ id: d.id, number: numbers.get(d.id) || 0, rects: d.anchor!.rects, active: openThread?.id === d.id }))}

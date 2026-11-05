@@ -11,7 +11,7 @@ import { adminActivityEmail, investorUpdateEmail, type AdminRoomActivity, type I
 // Emails carry room names, document names and links only, never content.
 
 type Pending = { roomId: string; recipientEmail: string; kind: HuNotificationKind; actorId?: string | null;
-  documentId?: string | null; documentVersionId?: string | null; discussionId?: string | null };
+  documentId?: string | null; documentVersionId?: string | null; discussionId?: string | null; subjectEmail?: string | null };
 
 async function enqueue(tx: Database, rows: Pending[]) {
   if (rows.length) await tx.huNotification.createMany({ data: rows.map(row => ({ ...row, teamId, recipientEmail: row.recipientEmail.trim().toLowerCase() })) });
@@ -84,9 +84,12 @@ export async function notifyDiscussionMessage(tx: Database, actor: Actor, roomId
   await enqueue(tx, rows);
 }
 
-export async function notifyAdmins(tx: Database, actor: { id: string; email: string }, roomId: string, kind: 'ADMIN_INVITE_ACCEPTED' | 'ADMIN_FIRST_VISIT') {
+type AdminKind = 'ADMIN_INVITE_ACCEPTED' | 'ADMIN_FIRST_VISIT' | 'ADMIN_MEMBER_INVITED' | 'ADMIN_MEMBER_REMOVED';
+/** Investor activity for the admin digest. subjectEmail names the member an ADMIN_MEMBER_* row is about. */
+export async function notifyAdmins(tx: Database, actor: { id: string; email: string }, roomId: string, kind: AdminKind, subjectEmail?: string) {
   if (adminEmails().includes(actor.email)) return;
-  await enqueue(tx, adminEmails().map(email => ({ roomId, recipientEmail: email, kind, actorId: actor.id })));
+  await enqueue(tx, adminEmails().map(email => ({ roomId, recipientEmail: email, kind, actorId: actor.id,
+    subjectEmail: subjectEmail ? subjectEmail.trim().toLowerCase() : null })));
 }
 
 /** Only investors who had accepted are told; pending invitations end silently. */
@@ -226,6 +229,8 @@ async function adminEmail(rows: HuNotification[]): Promise<Delivery> {
       const who = names.actor(item.actorId);
       if (item.kind === 'ADMIN_INVITE_ACCEPTED') lines.push(`${who} accepted the invitation`);
       else if (item.kind === 'ADMIN_FIRST_VISIT') lines.push(`${who} opened the room for the first time`);
+      else if (item.kind === 'ADMIN_MEMBER_INVITED') lines.push(`${who} invited ${item.subjectEmail ?? 'a colleague'}`);
+      else if (item.kind === 'ADMIN_MEMBER_REMOVED') lines.push(item.subjectEmail && item.subjectEmail === who ? `${who} left the room` : `${who} removed ${item.subjectEmail ?? 'a member'}`);
       else if (item.discussionId && (item.kind === 'ADMIN_MESSAGE' || item.kind === 'MENTION' || item.kind === 'THREAD_REPLY')) {
         const key = `${item.discussionId}:${item.actorId}`;
         if (seen.has(key)) continue; seen.add(key);
