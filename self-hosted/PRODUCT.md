@@ -27,6 +27,9 @@ existing discussions preserve the document version/page they reference.
 
 - One configurable access stage per room; selected documents have minimum stages.
 - Multiple invitees, invitations by email, later membership additions/removal.
+- Accepted investors invite and remove colleagues in their own room (up to 25 open memberships); admins are told and keep the final say.
+- Members download any document they can read, one PDF or a ZIP of the room; every investor download is recorded.
+- MCP connector at /mcp: an AI assistant signs in as the user (OAuth, email link) and can list rooms and documents and fetch 10-minute download links.
 - NextAuth email-link login, Resend email, no Clerk and no Drive integration.
 - Timestamped discussions, stable order, resolve/reopen history, room-scoped mentions.
 - Debounced notification emails (new documents, new versions, replies, mentions, access ended; admin activity digest) with a per-room opt-out. The opt-out page confirms the change and can turn emails back on.

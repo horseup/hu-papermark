@@ -19,14 +19,16 @@ export function signInEmail(url: string): Email {
   };
 }
 
-export function invitationEmail(roomName: string, roomUrl: string): Email {
+/** invitedBy is set when a room member, not HorseUp, sent the invitation. */
+export function invitationEmail(roomName: string, roomUrl: string, invitedBy?: string): Email {
+  const intro = invitedBy ? `${invitedBy} has invited you to ${roomName} in the HorseUp deal room.` : `You have been invited to ${roomName} in the HorseUp deal room.`;
   return {
     subject: `Your invitation to ${roomName}`,
-    text: `You have been invited to ${roomName} in the HorseUp deal room.\n\nOpen ${roomUrl} and sign in with this email address.\n\nThis invitation is personal. Access can be revoked by the room administrators.`,
+    text: `${intro}\n\nOpen ${roomUrl} and sign in with this email address.\n\nThis invitation is personal. Access can be revoked by the room administrators.`,
     html: renderEmail({
       title: `Your invitation to ${roomName}`,
       preheader: 'Open the room with the email address this was sent to.',
-      sections: [paragraph(`You have been invited to ${roomName} in the HorseUp deal room.`), paragraph('Open the room and sign in with this email address.')],
+      sections: [paragraph(intro), paragraph('Open the room and sign in with this email address.')],
       cta: { label: 'Open the room', url: roomUrl },
       footerNote: 'This invitation is personal. Access can be revoked by the room administrators.',
     }),

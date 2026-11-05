@@ -24,7 +24,10 @@ const anchorSchema = z.object({
 }).strict();
 // Invitations are sent immediately; everything else goes through the debounced
 // notification outbox in ./notifications.
-type Notice = { kind: 'invite'; email: string; roomId: string; roomName: string };
+type Notice = { kind: 'invite'; email: string; roomId: string; roomName: string; invitedBy?: string };
+/** Investors invite at most this many people at once and keep rooms below this many open memberships. */
+export const INVESTOR_INVITE_BATCH = 10;
+export const ROOM_MEMBER_LIMIT = 25;
 type Outcome = { value: unknown; notices?: Notice[] };
 
 async function validStage(tx: Database, stageId: string) {
@@ -138,19 +141,30 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       return { value: rule };
     }
     case 'invite': {
-      requireAdmin(actor);
-      const data = z.object({ roomId: id, emails: z.array(email).min(1).max(50) }).parse(input);
+      // Admins invite to any room; accepted investors invite colleagues to their own room.
+      const data = z.object({ roomId: id, emails: z.array(email).min(1).max(actor.admin ? 50 : INVESTOR_INVITE_BATCH) }).parse(input);
       const { room } = await roomContext(tx, actor, data.roomId);
       if (room.archivedAt) throw new HttpError(400, 'Reopen the room before inviting people.');
+      const admins = adminEmails();
       const notices: Notice[] = [];
       for (const address of new Set(data.emails)) {
-        const existing = await tx.huRoomMembership.findUnique({ where: { roomId_email: { roomId: room.id, email: address } } });
+        if (admins.includes(address)) continue;
+        const existing = await tx.huRoomMembership.findUnique({ where: { roomId_email: { roomId: room.id, email: address } }, include: { revokedBy: { select: { email: true } } } });
         if (existing?.acceptedAt && !existing.revokedAt) continue;
+        // An administrator's removal is final for investors.
+        if (!actor.admin && existing?.revokedAt && admins.includes(existing.revokedBy?.email?.toLowerCase() ?? '')) {
+          throw new HttpError(403, `HorseUp removed ${address} from this room. Please ask the HorseUp team to invite them again.`);
+        }
+        if (!actor.admin && !(existing && !existing.revokedAt)) {
+          const open = await tx.huRoomMembership.count({ where: { roomId: room.id, revokedAt: null } });
+          if (open >= ROOM_MEMBER_LIMIT) throw new HttpError(400, `A room can have up to ${ROOM_MEMBER_LIMIT} members. Please ask the HorseUp team to add more.`);
+        }
         await tx.huRoomMembership.upsert({ where: { roomId_email: { roomId: room.id, email: address } },
           create: { roomId: room.id, email: address, invitedById: actor.id },
-          update: { invitedById: actor.id, invitedAt: new Date(), revokedAt: null, acceptedAt: null, userId: null },
+          update: { invitedById: actor.id, invitedAt: new Date(), revokedAt: null, revokedById: null, acceptedAt: null, userId: null },
         });
-        notices.push({ kind: 'invite', email: address, roomId: room.id, roomName: room.name });
+        if (!actor.admin) await notifyAdmins(tx, actor, room.id, 'ADMIN_MEMBER_INVITED', address);
+        notices.push({ kind: 'invite', email: address, roomId: room.id, roomName: room.name, ...(actor.admin ? {} : { invitedBy: actor.email }) });
       }
       return { value: { invited: notices.length }, notices };
     }
@@ -167,14 +181,16 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       return { value: { accepted: true } };
     }
     case 'revokeMember': {
-      requireAdmin(actor);
+      // Admins remove anyone. Accepted investors remove any investor in their own room, themselves included.
+      // Admins are not memberships, so investors can never remove them.
       const data = z.object({ roomId: id, membershipId: id }).parse(input);
       await roomContext(tx, actor, data.roomId);
       const member = await tx.huRoomMembership.findFirst({ where: { id: data.membershipId, roomId: data.roomId } });
       if (!member) throw new HttpError(404, 'Member not found.');
       if (!member.revokedAt) {
-        await tx.huRoomMembership.update({ where: { id: member.id }, data: { revokedAt: new Date() } });
+        await tx.huRoomMembership.update({ where: { id: member.id }, data: { revokedAt: new Date(), revokedById: actor.id } });
         await notifyAccessEnded(tx, actor, data.roomId, [member]);
+        if (!actor.admin) await notifyAdmins(tx, actor, data.roomId, 'ADMIN_MEMBER_REMOVED', member.email);
       }
       return { value: { revoked: true } };
     }
@@ -311,7 +327,7 @@ export async function performAction(actor: Actor, input: Record<string, unknown>
   }
   let failedNotifications = 0;
   for (const notice of outcome.notices ?? []) {
-    try { await sendRoomInvite(notice.email, notice.roomName, notice.roomId); } catch { failedNotifications++; }
+    try { await sendRoomInvite(notice.email, notice.roomName, notice.roomId, notice.invitedBy); } catch { failedNotifications++; }
   }
   return { ...(outcome.value as object), ...(failedNotifications ? { warning: `${failedNotifications} email notification(s) could not be delivered. Invitations can be resent from Members.` } : {}) };
 }

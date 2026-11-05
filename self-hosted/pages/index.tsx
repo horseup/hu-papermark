@@ -20,6 +20,7 @@ export default function Overview() {
       <div className="room-list">{data.rooms.map(room => <Link className="room-row" key={room.id} href={`/rooms/${room.id}`}><span><strong>{room.name}</strong><small>{room.archivedAt ? 'Archived' : data.stages.find(s => s.id === room.stageId)?.name}</small></span><span>Open room →</span></Link>)}</div>
       {!data.rooms.length && <p className="empty">{data.actor.admin ? 'No investor rooms yet. Add access stages below, then create your first room.' : 'There are no active rooms for this email address.'}</p>}
       {data.actor.admin && <><Library data={data} refresh={refresh} /><StageSettings stages={data.stages} refresh={refresh} /></>}
+      <p className="muted"><Link href="/connect">Use the deal room from Claude or another AI assistant →</Link></p>
     </>}
   </div></Shell>;
 }

@@ -47,6 +47,7 @@ model HuInvestorRoom {
   discussions HuRoomDiscussion[]
   visits      HuRoomVisit[]
   notifications HuNotification[]
+  downloads   HuRoomDownload[]
 
   @@unique([id, teamId])
   @@index([teamId, archivedAt, createdAt])
@@ -76,17 +77,21 @@ model HuRoomMembership {
   invitedAt   DateTime @default(now())
   acceptedAt  DateTime?
   revokedAt   DateTime?
+  // Who removed the member. Investors cannot re-invite someone an administrator removed.
+  revokedById String?
   // Set when the investor opts out of notification emails for this room.
   notificationsMutedAt DateTime?
   updatedAt   DateTime @updatedAt
   room        HuInvestorRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
   user        User? @relation("HuRoomMember", fields: [userId], references: [id], onDelete: Restrict)
   invitedBy   User @relation("HuRoomInviter", fields: [invitedById], references: [id], onDelete: Restrict)
+  revokedBy   User? @relation("HuRoomRemover", fields: [revokedById], references: [id], onDelete: Restrict)
 
   @@unique([roomId, email])
   @@unique([roomId, userId])
   @@index([userId])
   @@index([invitedById])
+  @@index([revokedById])
   @@index([email, revokedAt])
 }
 
@@ -221,6 +226,8 @@ enum HuNotificationKind {
   ADMIN_MESSAGE
   ADMIN_INVITE_ACCEPTED
   ADMIN_FIRST_VISIT
+  ADMIN_MEMBER_INVITED
+  ADMIN_MEMBER_REMOVED
 }
 
 // Notification outbox. Rows are written in the same transaction as the change
@@ -237,6 +244,8 @@ model HuNotification {
   documentId        String?
   documentVersionId String?
   discussionId      String?
+  // The member an ADMIN_MEMBER_* notification is about (normalized lowercase email).
+  subjectEmail      String?
   createdAt         DateTime @default(now())
   claimedAt         DateTime?
   attempts          Int @default(0)
@@ -247,4 +256,57 @@ model HuNotification {
 
   @@index([teamId, processedAt, recipientEmail, createdAt])
   @@index([roomId, teamId])
+}
+
+enum HuDownloadChannel {
+  WEB
+  MCP
+}
+
+// One row per delivered document. A ZIP of the whole room writes one row per
+// document with bulk = true. Administrators' own downloads are not recorded.
+model HuRoomDownload {
+  id                String @id @default(cuid())
+  roomId            String
+  teamId            String
+  userId            String
+  documentId        String
+  documentVersionId String
+  bulk              Boolean @default(false)
+  channel           HuDownloadChannel
+  createdAt         DateTime @default(now())
+  room              HuInvestorRoom @relation(fields: [roomId, teamId], references: [id, teamId], onDelete: Cascade)
+  user              User @relation("HuRoomDownloader", fields: [userId], references: [id], onDelete: Restrict)
+  document          Document @relation(fields: [documentId, teamId], references: [id, teamId], onDelete: Restrict)
+  documentVersion   DocumentVersion @relation(fields: [documentVersionId, documentId], references: [id, documentId], onDelete: Restrict)
+
+  @@index([roomId, createdAt])
+  @@index([roomId, teamId])
+  @@index([userId])
+  @@index([documentId, teamId])
+  @@index([documentVersionId, documentId])
+}
+
+// Storage for the OAuth 2.1 authorization server (oidc-provider adapter) that
+// lets an AI connector act for one deal room user. One row per stored model
+// instance: clients, grants, codes, tokens, sessions and interactions.
+model HuOAuthRecord {
+  model      String
+  id         String
+  payload    Json
+  grantId    String?
+  userCode   String?
+  uid        String?
+  // The deal room user id the record acts for, when known.
+  accountId  String?
+  expiresAt  DateTime?
+  consumedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@id([model, id])
+  @@index([grantId])
+  @@index([uid])
+  @@index([userCode])
+  @@index([model, accountId])
+  @@index([expiresAt])
 }

@@ -3,6 +3,7 @@ model Document {
   huRoomSelections HuRoomDocument[]
   huDiscussions HuRoomDiscussion[]
   huReadings HuPageReading[]
+  huDownloads HuRoomDownload[]
   // HorseUp deal room soft delete: hidden from the library and every room.
   huDeletedAt DateTime?
   huDeletedById String?
@@ -56,6 +57,7 @@ model Document {
 model DocumentVersion {
   huDiscussions HuRoomDiscussion[]
   huReadings HuPageReading[]
+  huDownloads HuRoomDownload[]
   huS3VersionId String?
   id                String              @id @default(cuid())
   versionNumber     Int // e.g., 1, 2, 3 for version control
