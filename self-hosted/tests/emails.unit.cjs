@@ -12,7 +12,7 @@ require.extensions['.ts'] = (module, filename) => {
   }).outputText;
   module._compile(code, filename);
 };
-const { signInEmail, invitationEmail, investorUpdateEmail, adminActivityEmail } = require('../lib/emails.ts');
+const { signInEmail, invitationEmail, investorUpdateEmail, adminActivityEmail, mcpAccessRequestEmail } = require('../lib/emails.ts');
 const { safeHref } = require('../lib/email-layout.ts');
 process.env.HORSEUP_EMAIL_FROM = 'HorseUp <noreply@example.test>';
 process.env.NEXTAUTH_URL = 'https://dealroom.example.test';
@@ -169,4 +169,13 @@ test('layout: logo, footer and 600px card', () => {
     assert.ok(mail.html.includes('&copy; 2026 HorseUp. All rights reserved.'), name);
     assert.ok(mail.html.includes('max-width: 600px'), name);
   }
+});
+
+test('the MCP access request names the address once, escapes it and links to the rooms', () => {
+  const mail = mcpAccessRequestEmail('<b>x</b>@example.test', `${app}/`);
+  assert.equal(mail.subject, 'Investor materials requested by <b>x</b>@example.test');
+  assert.match(mail.text, /not a member of any investor room/);
+  assert.match(mail.text, /once per address/);
+  assert.ok(!mail.html.includes('<b>x</b>'), 'the address is escaped in HTML');
+  assert.ok(mail.html.includes('href="https://dealroom.example.test/"'), 'links to the rooms');
 });

@@ -109,6 +109,23 @@ export function investorUpdateEmail(rooms: InvestorRoomUpdate[]): Email {
   return { subject, text, html };
 }
 
+/** To investors@: a verified email that is not a room member asked for materials through the HorseUp MCP. */
+export function mcpAccessRequestEmail(email: string, roomsUrl: string): Email {
+  const intro = `${email} asked for HorseUp's investor materials through the HorseUp MCP.`;
+  const detail = 'The address is verified by HorseUp sign-in, but it is not a member of any investor room, so it received the investor contact and no documents. Invite it to a room to share documents.';
+  return {
+    subject: `Investor materials requested by ${email}`,
+    text: `${intro}\n\n${detail}\n\nRooms: ${roomsUrl}\n\nYou get this email once per address.`,
+    html: renderEmail({
+      title: 'Investor materials requested',
+      preheader: `${email} is not in an investor room yet.`,
+      sections: [paragraph(intro), paragraph(detail)],
+      cta: { label: 'Open the rooms', url: roomsUrl },
+      afterCta: [small('You get this email once per address.')],
+    }),
+  };
+}
+
 export type AdminRoomActivity = { name: string; url: string; lines: string[] };
 
 export function adminActivityEmail(rooms: AdminRoomActivity[]): Email {

@@ -11,7 +11,8 @@ import { downloadableDocuments, downloadLink, LINK_TTL_SECONDS, pdfFileName } fr
 
 export const INSTRUCTIONS = 'HorseUp deal room for invited investors. List the rooms and documents this user can access and get download links for the PDFs. Links expire after 10 minutes; ask for a new one when needed. Downloads are recorded for the HorseUp team. Discussions are not available here.';
 
-async function roomsFor(actor: Actor) {
+/** Active rooms with an accepted, non-revoked membership (every active room for administrators). */
+export async function roomsFor(actor: Actor) {
   return db.huInvestorRoom.findMany({
     where: { teamId, archivedAt: null, ...(actor.admin ? {} : { memberships: { some: { userId: actor.id, acceptedAt: { not: null }, revokedAt: null } } }) },
     select: { id: true, name: true }, orderBy: { createdAt: 'desc' },

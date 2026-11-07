@@ -36,6 +36,25 @@ Assistants are listed and disconnected on `/connect`. Each tool call
 re-evaluates current membership. Download links are HMAC-signed, bound to the
 user, room and document, valid for 10 minutes, and re-check access when used.
 
+**HorseUp MCP (internal).** The global HorseUp MCP (`mcp.horseup.de`, `apps/mcp`
+in the monorepo) signs users in itself and asks the deal room server to server,
+with the shared token `HORSEUP_MCP_SERVICE_TOKEN` (≥ 32 characters; unset means
+every request gets 503) and only the user's verified email:
+
+- `GET /api/internal/mcp/investor-documents?email=` → `{member:false}`, or
+  `{member:true, rooms:[{id, name, stage, documents:[{id, name, type, url, expiresAt}]}]}`
+  with the documents the room's stage unlocks. Membership means accepted and not
+  revoked, the same rule as `list_rooms`. Each `url` is a 10-minute download link
+  bound to the member, and fetching it is recorded with channel `MCP`.
+- `POST /api/internal/mcp/access-requests {email}` → for a verified non-member,
+  emails `investors@horseup.de` (`HORSEUP_INVESTOR_REPLY_TO`) once per address
+  (`HuMcpAccessRequest`): `202 {notified:true}`, then `200 {notified:false}`;
+  members get `200 {member:true}` and no email.
+- Rate limits: 30 requests per email and 600 overall per hour (in memory). The
+  token and emails are never logged.
+- Tests: `node --test tests/mcp-internal.integration.cjs` (same disposable
+  database rules as below).
+
 Metadata: `/.well-known/oauth-protected-resource/mcp` (RFC 9728),
 `/.well-known/oauth-authorization-server` and
 `/.well-known/openid-configuration`. OAuth state lives in `HuOAuthRecord`.

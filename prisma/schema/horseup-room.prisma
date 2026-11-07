@@ -310,3 +310,15 @@ model HuOAuthRecord {
   @@index([model, accountId])
   @@index([expiresAt])
 }
+
+// A verified email that asked for investor materials through the HorseUp MCP without being a
+// room member. investors@ is emailed once per address; the row is the dedupe.
+model HuMcpAccessRequest {
+  id         String    @id @default(cuid())
+  teamId     String
+  email      String
+  createdAt  DateTime  @default(now())
+  notifiedAt DateTime?
+
+  @@unique([teamId, email])
+}
