@@ -7,7 +7,6 @@ export function appUrl(): string {
   if (!value) throw new Error('Application URL is not configured');
   return new URL(value).origin;
 }
-export const MAX_PDF_BYTES = 100 * 1024 * 1024;
 /** Display name for every deal room email; the address stays HORSEUP_EMAIL_FROM. */
 export const SENDER_NAME = 'HorseUp Deal Room';
 export function investorReplyTo(): string {

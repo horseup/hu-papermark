@@ -31,6 +31,40 @@ model HuDocumentAccess {
   @@index([teamId])
 }
 
+// One folder tree shared by every room. A folder only decides where a document
+// appears; room selection and stages still decide who can read it. Rooms show
+// only folders that lead to a document the viewer can read.
+model HuFolder {
+  id        String   @id @default(cuid())
+  teamId    String
+  // Null for a top-level folder.
+  parentId  String?
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  parent    HuFolder?  @relation("HuFolderTree", fields: [parentId, teamId], references: [id, teamId], onDelete: Restrict)
+  children  HuFolder[] @relation("HuFolderTree")
+  documents HuDocumentFolder[]
+
+  @@unique([id, teamId])
+  @@index([teamId, parentId])
+  @@index([parentId, teamId])
+}
+
+model HuDocumentFolder {
+  documentId String   @id
+  teamId     String
+  folderId   String
+  updatedAt  DateTime @updatedAt
+  document   Document @relation(fields: [documentId, teamId], references: [id, teamId], onDelete: Cascade)
+  folder     HuFolder @relation(fields: [folderId, teamId], references: [id, teamId], onDelete: Restrict)
+
+  @@unique([documentId, teamId])
+  @@index([folderId, teamId])
+  @@index([teamId])
+}
+
 model HuInvestorRoom {
   id         String @id @default(cuid())
   teamId     String

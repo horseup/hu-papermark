@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { action } from '../lib/client';
+import { action, fileUrl } from '../lib/client';
 import type { Anchor, AnchorRect } from '../lib/room-types';
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
@@ -32,7 +32,7 @@ export default function PdfViewer({ documentId, versionId, roomId, visitId, page
   const [areaMode, setAreaMode] = useState(false); const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const container = useRef<HTMLDivElement>(null); const pageBox = useRef<HTMLDivElement>(null); const totals = useRef(new Map<string, number>());
   const visible = useRef(false);
-  const url = `/api/pdf?${new URLSearchParams({ documentId, versionId, roomId })}`;
+  const url = fileUrl(documentId, versionId, roomId);
   useEffect(() => { if (!container.current) return; const observer = new ResizeObserver(entries => setWidth(Math.max(200, entries[0].contentRect.width))); observer.observe(container.current); return () => observer.disconnect(); }, []);
   useEffect(() => { if (!container.current) return; const observer = new IntersectionObserver(entries => { visible.current = entries[0].isIntersecting; }); observer.observe(container.current); return () => observer.disconnect(); }, []);
   useEffect(() => {

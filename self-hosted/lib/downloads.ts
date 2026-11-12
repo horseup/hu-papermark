@@ -7,6 +7,7 @@ import type { HuDownloadChannel } from '@prisma/client';
 import { canReadRoomDocument } from '../../lib/horseup/rooms/access-policy';
 import { type Actor, HttpError, roomContext } from './access';
 import { adminEmails, appUrl, teamId } from './config';
+import { downloadFileName, fileTypeByExt } from './file-types';
 import { db } from './db';
 import { storage } from './storage';
 
@@ -17,6 +18,8 @@ import { storage } from './storage';
 export type DownloadableDocument = {
   id: string; name: string; versionId: string; versionNumber: number; numPages: number | null;
   fileSize: bigint; key: string; s3VersionId: string;
+  /** File extension and MIME type of the published version. */
+  ext: string; contentType: string; fileName: string;
 };
 
 /** The published documents this actor can read in the room, by name. Throws 404 when the room is not accessible. */
@@ -25,15 +28,17 @@ export async function downloadableDocuments(actor: Actor, roomId: string) {
   const documents = await db.document.findMany({ where: { teamId, huDeletedAt: null, huRoomSelections: { some: { roomId } } }, select: {
     id: true, name: true, huAccessRule: { select: { minimumStageId: true } },
     versions: { where: { isPrimary: true, huS3VersionId: { not: null } }, orderBy: { versionNumber: 'desc' }, take: 1,
-      select: { id: true, versionNumber: true, numPages: true, fileSize: true, file: true, huS3VersionId: true } },
+      select: { id: true, versionNumber: true, numPages: true, fileSize: true, file: true, huS3VersionId: true, type: true } },
   }, orderBy: { name: 'asc' } });
   const readable: DownloadableDocument[] = [];
   for (const d of documents) {
     const version = d.versions[0];
     if (!version?.huS3VersionId) continue;
     if (!actor.admin && !canReadRoomDocument(state.context, { id: d.id, teamId, minimumStageId: d.huAccessRule?.minimumStageId ?? null }, { roomId, documentId: d.id })) continue;
+    const type = fileTypeByExt(version.type);
     readable.push({ id: d.id, name: d.name, versionId: version.id, versionNumber: version.versionNumber, numPages: version.numPages,
-      fileSize: version.fileSize ?? BigInt(0), key: version.file, s3VersionId: version.huS3VersionId });
+      fileSize: version.fileSize ?? BigInt(0), key: version.file, s3VersionId: version.huS3VersionId,
+      ext: type.ext, contentType: type.mime, fileName: downloadFileName(d.name, type.ext) });
   }
   return { room: state.room, documents: readable };
 }
@@ -44,12 +49,8 @@ export async function recordDownloads(actor: Actor, roomId: string, documents: D
   await db.huRoomDownload.createMany({ data: documents.map(d => ({ roomId, teamId, userId: actor.id, documentId: d.id, documentVersionId: d.versionId, bulk, channel })) });
 }
 
-/** A file name that is safe on every OS. Keeps Unicode; the header carries an ASCII fallback. */
-export function pdfFileName(name: string) {
-  // eslint-disable-next-line no-control-regex
-  const base = name.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 150).trim() || 'document';
-  return /\.pdf$/i.test(base) ? base : `${base}.pdf`;
-}
+/** A PDF file name that is safe on every OS. Keeps Unicode; the header carries an ASCII fallback. */
+export function pdfFileName(name: string) { return downloadFileName(name, 'pdf'); }
 export function uniqueNames(names: string[]) {
   const used = new Set<string>();
   return names.map(name => {
@@ -71,11 +72,12 @@ async function objectStream(document: DownloadableDocument) {
   return { body: object.Body as Readable, length: object.ContentLength };
 }
 
-export async function sendPdf(res: NextApiResponse, document: DownloadableDocument) {
+export async function sendFile(res: NextApiResponse, document: DownloadableDocument) {
   const { body, length } = await objectStream(document);
   res.status(200);
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', attachmentHeader(pdfFileName(document.name)));
+  res.setHeader('Content-Type', document.contentType);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', attachmentHeader(document.fileName));
   if (length !== undefined) res.setHeader('Content-Length', length);
   await new Promise<void>((resolve, reject) => {
     body.on('error', reject); res.on('close', resolve); res.on('finish', resolve);
@@ -83,13 +85,14 @@ export async function sendPdf(res: NextApiResponse, document: DownloadableDocume
   });
 }
 
-/** Streams a ZIP without compression (PDFs are already compressed), one S3 object at a time. */
-export async function sendZip(res: NextApiResponse, roomName: string, documents: DownloadableDocument[]) {
+/** Streams a ZIP without compression (most office files and PDFs are already compressed), one S3 object at a time. */
+export async function sendZip(res: NextApiResponse, roomName: string, documents: DownloadableDocument[], paths?: Map<string, string>) {
   const archive = new ZipArchive({ store: true });
-  const names = uniqueNames(documents.map(d => pdfFileName(d.name)));
+  // Inside the ZIP each file keeps its folder path from the room, e.g. "Financials/Model.xlsx".
+  const names = uniqueNames(documents.map(d => (paths?.get(d.id) ? `${paths.get(d.id)}/` : '') + d.fileName));
   res.status(200);
   res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', attachmentHeader(`${pdfFileName(roomName).replace(/\.pdf$/i, '')}.zip`));
+  res.setHeader('Content-Disposition', attachmentHeader(downloadFileName(roomName, 'zip')));
   let failed: unknown = null;
   archive.on('error', error => { failed = error; res.destroy(); });
   archive.pipe(res);

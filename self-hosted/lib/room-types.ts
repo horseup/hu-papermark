@@ -6,6 +6,6 @@ export type Discussion = { id: string; title: string; documentId: string | null;
   messages: { id: string; body: string; createdAt: string; author: Person; mentions: { userId: string }[] }[];
   events: { type: string; createdAt: string; actor: Person }[] };
 export type RoomData = Workspace & { room: Room & { selectedDocumentIds: string[]; notificationsEnabled: boolean | null }; documents: LibraryDocument[]; discussions: Discussion[];
-  members: { id: string; email: string; userId: string | null; acceptedAt: string | null; revokedAt: string | null }[];
+  members: { id: string; email: string; userId: string | null; invitedAt: string; acceptedAt: string | null; revokedAt: string | null }[];
   administrators: Person[]; visits: { id: string; startedAt: string; user: Person; readings: { documentId: string; pageNumber: number; visibleMs: number }[] }[];
   downloads: { id: string; createdAt: string; bulk: boolean; channel: 'WEB' | 'MCP'; documentId: string; user: { email: string | null } }[] };

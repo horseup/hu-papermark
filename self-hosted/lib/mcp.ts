@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { type Actor, HttpError } from './access';
 import { teamId } from './config';
 import { db } from './db';
-import { downloadableDocuments, downloadLink, LINK_TTL_SECONDS, pdfFileName } from './downloads';
+import { downloadableDocuments, downloadLink, LINK_TTL_SECONDS } from './downloads';
+import { folderPath, loadFolders, placementsFor } from './folders';
 
 // MCP tools for the deal room connector. Read-only: list rooms and documents and
 // hand out short-lived download links. Access is evaluated per call with the same
 // rules as the website, so a removed member or archived room returns nothing.
 
-export const INSTRUCTIONS = 'HorseUp deal room for invited investors. List the rooms and documents this user can access and get download links for the PDFs. Links expire after 10 minutes; ask for a new one when needed. Downloads are recorded for the HorseUp team. Discussions are not available here.';
+export const INSTRUCTIONS = 'HorseUp deal room for invited investors. List the rooms and documents this user can access and get download links for the files (PDF, Word, Excel, PowerPoint, CSV, text and images). Links expire after 10 minutes; ask for a new one when needed. Downloads are recorded for the HorseUp team. Discussions are not available here.';
 
 /** Active rooms with an accepted, non-revoked membership (every active room for administrators). */
 export async function roomsFor(actor: Actor) {
@@ -60,21 +61,23 @@ export function dealRoomServer(actor: Actor) {
 
   server.registerTool('list_documents', {
     title: 'List documents',
-    description: 'List the published documents in a deal room: name, version, pages and size. roomId is optional when the user has one room.',
+    description: 'List the published documents in a deal room: name, folder, file type, version, pages (PDFs only) and size. roomId is optional when the user has one room.',
     inputSchema: { roomId: z.string().min(1).max(150).optional().describe('Room id from list_rooms.') }, annotations: readOnly,
   }, async ({ roomId }) => {
     try {
       const room = await resolveRoom(actor, roomId);
       const { documents } = await downloadableDocuments(actor, room.id);
+      const [folders, placements] = await Promise.all([loadFolders(), placementsFor(documents.map(d => d.id))]);
       return result({ roomId: room.id, room: room.name, documents: documents.map(d => ({
-        documentId: d.id, name: d.name, fileName: pdfFileName(d.name), version: d.versionNumber, pages: d.numPages, sizeBytes: Number(d.fileSize),
+        documentId: d.id, name: d.name, folder: folderPath(folders, placements.get(d.id)) || null, fileName: d.fileName, fileType: d.ext,
+        contentType: d.contentType, version: d.versionNumber, pages: d.numPages, sizeBytes: Number(d.fileSize),
       })) });
     } catch (error) { return failure(error); }
   });
 
   server.registerTool('get_document_download_link', {
     title: 'Get a document download link',
-    description: `Get a download URL for one PDF in a deal room. The URL works with a plain HTTPS GET, without authentication, for ${LINK_TTL_SECONDS / 60} minutes. The download is recorded for the HorseUp team.`,
+    description: `Get a download URL for one document in a deal room. The URL works with a plain HTTPS GET, without authentication, for ${LINK_TTL_SECONDS / 60} minutes. The download is recorded for the HorseUp team.`,
     inputSchema: { documentId: z.string().min(1).max(150).describe('Document id from list_documents.'), roomId: z.string().min(1).max(150).optional().describe('Room id from list_rooms; optional when the user has one room.') },
     annotations: { ...readOnly, idempotentHint: false },
   }, async ({ documentId, roomId }) => {
@@ -83,13 +86,13 @@ export function dealRoomServer(actor: Actor) {
       const document = (await downloadableDocuments(actor, room.id)).documents.find(d => d.id === documentId);
       if (!document) throw new HttpError(404, 'Document not found in this room. Call list_documents to see what is available.');
       const link = downloadLink(actor.id, room.id, document.id);
-      return result({ roomId: room.id, documentId: document.id, name: document.name, fileName: pdfFileName(document.name), contentType: 'application/pdf', sizeBytes: Number(document.fileSize), downloadUrl: link.url, expiresAt: link.expiresAt });
+      return result({ roomId: room.id, documentId: document.id, name: document.name, fileName: document.fileName, contentType: document.contentType, sizeBytes: Number(document.fileSize), downloadUrl: link.url, expiresAt: link.expiresAt });
     } catch (error) { return failure(error); }
   });
 
   server.registerTool('get_all_documents_download_link', {
     title: 'Get a ZIP of all documents',
-    description: `Get one download URL for a ZIP file with every PDF in a deal room. The URL works with a plain HTTPS GET for ${LINK_TTL_SECONDS / 60} minutes. Each document is recorded as downloaded.`,
+    description: `Get one download URL for a ZIP file with every document in a deal room, in its folders. The URL works with a plain HTTPS GET for ${LINK_TTL_SECONDS / 60} minutes. Each document is recorded as downloaded.`,
     inputSchema: { roomId: z.string().min(1).max(150).optional().describe('Room id from list_rooms; optional when the user has one room.') },
     annotations: { ...readOnly, idempotentHint: false },
   }, async ({ roomId }) => {

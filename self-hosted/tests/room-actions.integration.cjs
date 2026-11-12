@@ -183,7 +183,7 @@ test('deleting a document removes it from every room, keeps its discussions and 
   await denied(act(admin, 'deleteDocument', { documentId: removable.id }), 400);
   await denied(act(admin, 'setRoomDocuments', { roomId: room.id, documentIds: [removable.id] }), 400);
   await denied(act(admin, 'setDocumentStage', { documentId: removable.id, stageId: intro.id }), 400);
-  await denied(act(admin, 'beginUpload', { name: 'New version', documentId: removable.id, stageId: intro.id, size: 10 }), 400);
+  await denied(act(admin, 'beginUpload', { name: 'New version', fileName: 'new-version.pdf', documentId: removable.id, stageId: intro.id, size: 10 }), 400);
   await denied(act(investor, 'createDiscussion', { roomId: room.id, title: 'New', body: 'Question', documentId: removable.id, versionId: removableVersion.id, pageNumber: 1, requestId: randomUUID() }), 404);
 
   // The existing thread survives as a room-level conversation.

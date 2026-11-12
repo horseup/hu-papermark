@@ -9,10 +9,34 @@ schema in `../prisma/schema` and the independently implemented
 
 Deployed at https://dealroom.horseup.de. See [deployment record](DEPLOYMENT.md) for the pinned source, completed checks, backup restore evidence and remaining operational checks. This directory's `package-lock.json` is the only dependency manifest in the repository.
 
+## Folders and file types
+
+**Folders.** Administrators keep one folder tree (`HuFolder`) for the whole deal room
+and place each document in it (`HuDocumentFolder`, none = top level). A folder is only
+a location: room selection and stages still decide access. A room shows only the
+folders that lead to a document the viewer can open, so empty folders and the names of
+folders that hold locked documents stay hidden. Deleting a folder moves its documents
+and subfolders up one level. Sibling names are unique regardless of case.
+
+**File types.** `lib/file-types.ts` is the single list: PDF, DOCX, DOC, XLSX, XLS,
+CSV, PPTX, PPT, TXT, MD, JPG, PNG, GIF and WebP (no SVG or HTML). Uploads keep the
+original file. `publishUpload` checks size, content type and the file signature before
+publishing. PDFs and images get a small JPEG thumbnail made in the uploader's
+browser (optional; a missing one never blocks publishing).
+
+**Viewing.** `GET /api/file` serves the published file or its thumbnail for the
+in-page viewer with the same access check as downloads (`/api/pdf` is an alias). Non-PDF
+responses carry a sandbox CSP and `nosniff`. Spreadsheets are parsed in the browser
+with SheetJS (read-only, values as last saved, first 1,000 rows and 50 columns);
+Word and PowerPoint are download-only. Viewing is not recorded; downloads are.
+
+**Local testing.** `HORSEUP_S3_ENDPOINT` points the S3 client at an S3-compatible
+mock (path-style). Leave it unset in production.
+
 ## Members, downloads and the MCP connector
 
-**Members.** Accepted investors can invite colleagues to their own room (10 per
-request, 25 open memberships per room), resend or withdraw invitations, remove
+**Members.** Everyone invites at most 10 people per request (administrators too).
+Accepted investors can invite colleagues to their own room (25 open memberships per room), resend or withdraw invitations, remove
 any investor in the room, and leave. They can never remove administrators, who
 are not memberships. Someone an administrator removed can only be re-invited by
 an administrator. Investor invitations and removals appear in the admin digest.
@@ -66,8 +90,10 @@ Known advisory: `archiver@8` pulls `minimatch@10` (GHSA-g3hv-75wg-m249,
 moderate) through `readdir-glob`. Only archiver's glob helpers reach it; this
 app only appends S3 streams.
 
-The database suite for these features is
-`node --test tests/members-downloads.integration.cjs`, with the same
+The database suites for these features are
+`node --test tests/members-downloads.integration.cjs` and
+`node --test tests/folders-files.integration.cjs` (file-type and folder helpers:
+`node --test tests/file-types.unit.cjs`, no database), with the same
 disposable-database requirements as below. Run the two database suites one at a time
 (`--test-concurrency=1`); in parallel their serializable transactions conflict.
 
