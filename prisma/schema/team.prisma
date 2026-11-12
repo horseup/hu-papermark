@@ -1,6 +1,7 @@
 model Team {
   huRoomStages HuRoomStage[]
   huInvestorRooms HuInvestorRoom[]
+  huFolders HuFolder[]
   id            String         @id @default(cuid())
   name          String
   slug          String?        @unique // Optional human-readable identifier (e.g. "acme"), used for SSO login

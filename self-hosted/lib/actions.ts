@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { PutObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { type Actor, type Database, HttpError, requireAdmin, roomContext, documentAccess, threadAccess } from './access';
-import { adminEmails, MAX_PDF_BYTES, teamId } from './config';
+import { adminEmails, teamId } from './config';
+import { fileTypeByExt, fileTypeFor, matchesSignature, MAX_THUMBNAIL_BYTES, MAX_UPLOAD_BYTES, SIGNATURE_BYTES, THUMBNAIL_MIME, wantsThumbnail } from './file-types';
 import { sendRoomInvite } from './mail';
 import { notifyAccessEnded, notifyAdmins, notifyDiscussionMessage, notifyDocumentChanges, visibleDocuments } from './notifications';
 import { storage } from './storage';
@@ -25,10 +26,37 @@ const anchorSchema = z.object({
 // Invitations are sent immediately; everything else goes through the debounced
 // notification outbox in ./notifications.
 type Notice = { kind: 'invite'; email: string; roomId: string; roomName: string; invitedBy?: string };
-/** Investors invite at most this many people at once and keep rooms below this many open memberships. */
-export const INVESTOR_INVITE_BATCH = 10;
+/** Everyone invites at most this many people at once; investors keep rooms below this many open memberships. */
+export const INVITE_BATCH = 10;
 export const ROOM_MEMBER_LIMIT = 25;
+export const MAX_FOLDERS = 300;
 type Outcome = { value: unknown; notices?: Notice[] };
+
+const folderName = z.string().trim().min(1).max(120);
+async function validFolder(tx: Database, folderId: string) {
+  const folder = await tx.huFolder.findFirst({ where: { id: folderId, teamId } });
+  if (!folder) throw new HttpError(400, 'Choose a valid folder.');
+  return folder;
+}
+/** Sibling names are unique regardless of case; the database enforces the same rule. */
+async function uniqueFolderName(tx: Database, parentId: string | null, name: string, exceptId?: string) {
+  const clash = await tx.huFolder.findFirst({ where: { teamId, parentId, name: { equals: name, mode: 'insensitive' }, ...(exceptId ? { id: { not: exceptId } } : {}) } });
+  if (clash) throw new HttpError(409, `A folder named "${name}" already exists here.`);
+}
+/** Throws when moving folderId under parentId would create a loop. */
+async function assertNotDescendant(tx: Database, folderId: string, parentId: string | null) {
+  let cursor = parentId;
+  for (let depth = 0; cursor; depth++) {
+    if (cursor === folderId) throw new HttpError(400, 'A folder cannot be moved into itself or one of its subfolders.');
+    if (depth > 64) throw new HttpError(400, 'The folder structure is too deep.');
+    const parent: { parentId: string | null } | null = await tx.huFolder.findFirst({ where: { id: cursor, teamId }, select: { parentId: true } });
+    cursor = parent?.parentId ?? null;
+  }
+}
+async function placeDocument(tx: Database, documentId: string, folderId: string | null) {
+  if (!folderId) { await tx.huDocumentFolder.deleteMany({ where: { documentId, teamId } }); return; }
+  await tx.huDocumentFolder.upsert({ where: { documentId }, create: { documentId, teamId, folderId }, update: { folderId } });
+}
 
 async function validStage(tx: Database, stageId: string) {
   const stage = await tx.huRoomStage.findFirst({ where: { id: stageId, teamId } });
@@ -142,7 +170,7 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
     }
     case 'invite': {
       // Admins invite to any room; accepted investors invite colleagues to their own room.
-      const data = z.object({ roomId: id, emails: z.array(email).min(1).max(actor.admin ? 50 : INVESTOR_INVITE_BATCH) }).parse(input);
+      const data = z.object({ roomId: id, emails: z.array(email).min(1).max(INVITE_BATCH) }).parse(input);
       const { room } = await roomContext(tx, actor, data.roomId);
       if (room.archivedAt) throw new HttpError(400, 'Reopen the room before inviting people.');
       const admins = adminEmails();
@@ -211,7 +239,8 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
       if (data.documentId) {
         await documentAccess(tx, actor, data.roomId, data.documentId);
         const version = await tx.documentVersion.findFirst({ where: { id: data.versionId ?? '', documentId: data.documentId } });
-        if (!version?.numPages || !version.huS3VersionId || (data.pageNumber && data.pageNumber > version.numPages)) throw new HttpError(400, 'Invalid document reference.');
+        // Only PDFs have pages; other files are referenced as a whole.
+        if (!version?.huS3VersionId || (data.pageNumber && (!version.numPages || data.pageNumber > version.numPages))) throw new HttpError(400, 'Invalid document reference.');
       } else if (data.versionId || data.pageNumber) throw new HttpError(400, 'A page reference needs a document.');
       await validMentions(tx, data.roomId, data.mentionIds);
       const existing = await tx.huRoomDiscussion.findUnique({ where: { id: data.requestId } });
@@ -288,19 +317,73 @@ async function change(tx: Database, actor: Actor, input: Record<string, unknown>
     }
     case 'beginUpload': {
       requireAdmin(actor);
-      const data = z.object({ name: title, documentId: id.optional(), stageId: id, size: z.number().int().positive().max(MAX_PDF_BYTES) }).parse(input);
+      const data = z.object({ name: title, fileName: z.string().trim().min(1).max(300), documentId: id.optional(), stageId: id, folderId: id.nullable().default(null),
+        size: z.number().int().positive().max(MAX_UPLOAD_BYTES), thumbnailSize: z.number().int().positive().max(MAX_THUMBNAIL_BYTES).nullable().default(null) }).parse(input);
+      const type = fileTypeFor(data.fileName);
+      if (!type) throw new HttpError(400, 'This file type is not supported.');
       await validStage(tx, data.stageId);
       if (data.documentId) await validDocuments(tx, [data.documentId]);
-      const key = `documents/${teamId}/${randomUUID()}.pdf`;
+      if (data.folderId) await validFolder(tx, data.folderId);
+      const key = `documents/${teamId}/${randomUUID()}.${type.ext}`;
+      const thumbnailKey = data.thumbnailSize && wantsThumbnail(type.kind) ? `${key}.thumb.jpg` : null;
       const document = data.documentId ? await tx.document.findUniqueOrThrow({ where: { id: data.documentId } }) : await tx.document.create({ data: {
-        name: data.name, teamId, ownerId: actor.id, file: key, type: 'pdf', contentType: 'application/pdf', storageType: 'S3_PATH',
+        name: data.name, teamId, ownerId: actor.id, file: key, type: type.ext, contentType: type.mime, storageType: 'S3_PATH',
       } });
       const previous = await tx.documentVersion.aggregate({ where: { documentId: document.id }, _max: { versionNumber: true } });
       const version = await tx.documentVersion.create({ data: { documentId: document.id, versionNumber: (previous._max.versionNumber ?? 0) + 1,
-        file: key, fileSize: data.size, type: 'pdf', contentType: 'application/pdf', storageType: 'S3_PATH', isPrimary: false,
+        file: key, fileSize: data.size, type: type.ext, contentType: type.mime, storageType: 'S3_PATH', isPrimary: false, huThumbnailFile: thumbnailKey,
       } });
-      if (!data.documentId) await tx.huDocumentAccess.create({ data: { documentId: document.id, teamId, minimumStageId: data.stageId } });
-      return { value: { documentId: document.id, versionId: version.id, key, size: data.size } };
+      if (!data.documentId) {
+        await tx.huDocumentAccess.create({ data: { documentId: document.id, teamId, minimumStageId: data.stageId } });
+        await placeDocument(tx, document.id, data.folderId);
+      }
+      return { value: { documentId: document.id, versionId: version.id, key, size: data.size, mime: type.mime, thumbnailKey, thumbnailSize: data.thumbnailSize } };
+    }
+    case 'createFolder': {
+      requireAdmin(actor);
+      const data = z.object({ name: folderName, parentId: id.nullable().default(null) }).parse(input);
+      if (data.parentId) await validFolder(tx, data.parentId);
+      if (await tx.huFolder.count({ where: { teamId } }) >= MAX_FOLDERS) throw new HttpError(400, `A maximum of ${MAX_FOLDERS} folders is supported.`);
+      await uniqueFolderName(tx, data.parentId, data.name);
+      return { value: await tx.huFolder.create({ data: { teamId, name: data.name, parentId: data.parentId } }) };
+    }
+    case 'renameFolder': {
+      requireAdmin(actor);
+      const data = z.object({ folderId: id, name: folderName }).parse(input);
+      const folder = await validFolder(tx, data.folderId);
+      await uniqueFolderName(tx, folder.parentId, data.name, folder.id);
+      return { value: await tx.huFolder.update({ where: { id: folder.id }, data: { name: data.name } }) };
+    }
+    case 'moveFolder': {
+      requireAdmin(actor);
+      const data = z.object({ folderId: id, parentId: id.nullable() }).parse(input);
+      const folder = await validFolder(tx, data.folderId);
+      if (data.parentId) await validFolder(tx, data.parentId);
+      await assertNotDescendant(tx, folder.id, data.parentId);
+      await uniqueFolderName(tx, data.parentId, folder.name, folder.id);
+      return { value: await tx.huFolder.update({ where: { id: folder.id }, data: { parentId: data.parentId } }) };
+    }
+    case 'deleteFolder': {
+      // Contents move up one level instead of disappearing.
+      requireAdmin(actor);
+      const data = z.object({ folderId: id }).parse(input);
+      const folder = await validFolder(tx, data.folderId);
+      const children = await tx.huFolder.findMany({ where: { teamId, parentId: folder.id } });
+      for (const child of children) await uniqueFolderName(tx, folder.parentId, child.name, child.id);
+      await tx.huFolder.updateMany({ where: { teamId, parentId: folder.id }, data: { parentId: folder.parentId } });
+      const moved = folder.parentId
+        ? await tx.huDocumentFolder.updateMany({ where: { teamId, folderId: folder.id }, data: { folderId: folder.parentId } })
+        : await tx.huDocumentFolder.deleteMany({ where: { teamId, folderId: folder.id } });
+      await tx.huFolder.delete({ where: { id: folder.id } });
+      return { value: { deleted: true, movedFolders: children.length, movedDocuments: moved.count } };
+    }
+    case 'setDocumentFolder': {
+      requireAdmin(actor);
+      const data = z.object({ documentId: id, folderId: id.nullable() }).parse(input);
+      await validDocuments(tx, [data.documentId]);
+      if (data.folderId) await validFolder(tx, data.folderId);
+      await placeDocument(tx, data.documentId, data.folderId);
+      return { value: { updated: true } };
     }
     default: throw new HttpError(400, 'Unknown action.');
   }
@@ -320,10 +403,13 @@ export async function performAction(actor: Actor, input: Record<string, unknown>
   }
   if (!outcome) throw new HttpError(409, 'Please retry the change.');
   if (input.action === 'beginUpload') {
-    const value = outcome.value as { key: string; size: number; documentId: string; versionId: string };
+    const value = outcome.value as { key: string; size: number; mime: string; documentId: string; versionId: string; thumbnailKey: string | null; thumbnailSize: number | null };
     const { client, bucket } = storage();
-    const uploadUrl = await getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: value.key, ContentType: 'application/pdf', ContentLength: value.size }), { expiresIn: 300 });
-    return { documentId: value.documentId, versionId: value.versionId, uploadUrl };
+    const uploadUrl = await getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: value.key, ContentType: value.mime, ContentLength: value.size }), { expiresIn: 300 });
+    const thumbnailUploadUrl = value.thumbnailKey && value.thumbnailSize
+      ? await getSignedUrl(client, new PutObjectCommand({ Bucket: bucket, Key: value.thumbnailKey, ContentType: THUMBNAIL_MIME, ContentLength: value.thumbnailSize }), { expiresIn: 300 })
+      : null;
+    return { documentId: value.documentId, versionId: value.versionId, contentType: value.mime, uploadUrl, thumbnailUploadUrl };
   }
   let failedNotifications = 0;
   for (const notice of outcome.notices ?? []) {
@@ -334,18 +420,33 @@ export async function performAction(actor: Actor, input: Record<string, unknown>
 
 async function publishUpload(actor: Actor, input: Record<string, unknown>) {
   requireAdmin(actor);
-  const data = z.object({ versionId: id, pages: z.number().int().min(1).max(10000) }).parse(input);
+  const data = z.object({ versionId: id, pages: z.number().int().min(1).max(10000).nullable().default(null) }).parse(input);
   const version = await db.documentVersion.findFirst({ where: { id: data.versionId, document: { teamId, huDeletedAt: null } } });
   if (!version) throw new HttpError(404, 'Upload not found.');
   // Published versions are immutable: retries must not repin old discussions to
   // a later S3 object uploaded through a still-valid presigned upload URL.
   if (version.huS3VersionId) return { documentId: version.documentId };
+  const type = fileTypeByExt(version.type);
+  if (type.kind === 'pdf' && !data.pages) throw new HttpError(400, 'The PDF page count is missing.');
   const { client, bucket } = storage();
   const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: version.file }));
-  if (!head.ContentLength || head.ContentLength > MAX_PDF_BYTES || BigInt(head.ContentLength) !== version.fileSize || head.ContentType !== 'application/pdf') throw new HttpError(400, 'The uploaded PDF does not match the expected file.');
+  if (!head.ContentLength || head.ContentLength > MAX_UPLOAD_BYTES || BigInt(head.ContentLength) !== version.fileSize || head.ContentType !== type.mime) throw new HttpError(400, 'The uploaded file does not match the expected file.');
   if (!head.VersionId) throw new HttpError(500, 'Document storage versioning is required.');
-  const prefix = await client.send(new GetObjectCommand({ Bucket: bucket, Key: version.file, VersionId: head.VersionId, Range: 'bytes=0-4' }));
-  if (await prefix.Body?.transformToString() !== '%PDF-') throw new HttpError(400, 'Only PDF documents can be published.');
+  const prefix = await client.send(new GetObjectCommand({ Bucket: bucket, Key: version.file, VersionId: head.VersionId, Range: `bytes=0-${SIGNATURE_BYTES - 1}` }));
+  const bytes = await prefix.Body?.transformToByteArray();
+  if (!bytes || !matchesSignature(type, bytes)) throw new HttpError(400, `The file content does not look like a ${type.label}.`);
+  // The preview is optional: a missing or invalid thumbnail never blocks publishing.
+  let thumbnailVersionId: string | null = null;
+  if (version.huThumbnailFile) {
+    try {
+      const thumb = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: version.huThumbnailFile }));
+      if (thumb.VersionId && thumb.ContentType === THUMBNAIL_MIME && thumb.ContentLength && thumb.ContentLength <= MAX_THUMBNAIL_BYTES) {
+        const start = await client.send(new GetObjectCommand({ Bucket: bucket, Key: version.huThumbnailFile, VersionId: thumb.VersionId, Range: 'bytes=0-2' }));
+        const magic = await start.Body?.transformToByteArray();
+        if (magic && matchesSignature(fileTypeByExt('jpg'), magic)) thumbnailVersionId = thumb.VersionId;
+      }
+    } catch { thumbnailVersionId = null; }
+  }
   await db.$transaction(async tx => {
     const saved = await tx.documentVersion.findUniqueOrThrow({ where: { id: version.id } });
     if (saved.huS3VersionId) return;
@@ -353,8 +454,9 @@ async function publishUpload(actor: Actor, input: Record<string, unknown>) {
     const current = await tx.documentVersion.findFirst({ where: { documentId: version.documentId, isPrimary: true }, orderBy: { versionNumber: 'desc' } });
     if (current && current.versionNumber > version.versionNumber) throw new HttpError(409, 'A newer version has already been published.');
     await tx.documentVersion.updateMany({ where: { documentId: version.documentId, isPrimary: true }, data: { isPrimary: false } });
-    await tx.documentVersion.update({ where: { id: version.id }, data: { isPrimary: true, numPages: data.pages, huS3VersionId: head.VersionId } });
-    await tx.document.update({ where: { id: version.documentId }, data: { file: version.file, numPages: data.pages } });
+    const pages = type.kind === 'pdf' ? data.pages : null;
+    await tx.documentVersion.update({ where: { id: version.id }, data: { isPrimary: true, numPages: pages, huS3VersionId: head.VersionId, huThumbnailS3VersionId: thumbnailVersionId } });
+    await tx.document.update({ where: { id: version.documentId }, data: { file: version.file, numPages: pages, type: type.ext, contentType: type.mime } });
     await notifyDocumentChanges(tx, actor, before);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   return { documentId: version.documentId };

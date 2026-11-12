@@ -19,7 +19,8 @@ room-wide discussions, without exposing other investors' conversations.
 
 ## Operating Context
 
-Authors work in Google Drive, then manually export and upload PDFs. The central
+Authors work in Google Drive, then upload files (PDF, Word, Excel, PowerPoint, CSV,
+text, images) into one shared folder tree. The central
 library holds published versions. Rooms always show the latest published version;
 existing discussions preserve the document version/page they reference.
 
@@ -28,7 +29,10 @@ existing discussions preserve the document version/page they reference.
 - One configurable access stage per room; selected documents have minimum stages.
 - Multiple invitees, invitations by email, later membership additions/removal.
 - Accepted investors invite and remove colleagues in their own room (up to 25 open memberships); admins are told and keep the final say.
-- Members download any document they can read, one PDF or a ZIP of the room; every investor download is recorded.
+- Members download any document they can read, one file or a ZIP of the room (in its folders); every investor download is recorded.
+- One folder tree shared by every room; a document's folder is only its location. Rooms hide folders with nothing the viewer can open.
+- Previews: PDFs with inline comments, spreadsheets (XLSX, XLS, CSV) as a read-only grid via SheetJS in the browser, images and text inline; Word and PowerPoint are download-only. No third-party viewers.
+- Design: minimal Papermark-style UI per the deal room mockup (sortable TanStack tables, folder tree, members dialog, banner from the App Store screens).
 - MCP connector at /mcp: an AI assistant signs in as the user (OAuth, email link) and can list rooms and documents and fetch 10-minute download links.
 - NextAuth email-link login, Resend email, no Clerk and no Drive integration.
 - Timestamped discussions, stable order, resolve/reopen history, room-scoped mentions.

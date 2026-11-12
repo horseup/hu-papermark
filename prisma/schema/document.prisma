@@ -4,6 +4,8 @@ model Document {
   huDiscussions HuRoomDiscussion[]
   huReadings HuPageReading[]
   huDownloads HuRoomDownload[]
+  // HorseUp deal room: the document's place in the shared folder tree (none = top level).
+  huFolderPlacement HuDocumentFolder?
   // HorseUp deal room soft delete: hidden from the library and every room.
   huDeletedAt DateTime?
   huDeletedById String?
@@ -59,6 +61,9 @@ model DocumentVersion {
   huReadings HuPageReading[]
   huDownloads HuRoomDownload[]
   huS3VersionId String?
+  // HorseUp deal room: small JPEG preview (first PDF page or scaled image), made in the uploader's browser.
+  huThumbnailFile        String?
+  huThumbnailS3VersionId String?
   id                String              @id @default(cuid())
   versionNumber     Int // e.g., 1, 2, 3 for version control
   document          Document            @relation(fields: [documentId], references: [id], onDelete: Cascade)

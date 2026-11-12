@@ -3,7 +3,7 @@ import type { NextApiRequest } from 'next';
 import { type Actor, HttpError } from './access';
 import { adminEmails, appUrl, investorReplyTo, teamId } from './config';
 import { db } from './db';
-import { downloadableDocuments, downloadLink, pdfFileName } from './downloads';
+import { downloadableDocuments, downloadLink } from './downloads';
 import { mcpAccessRequestEmail } from './emails';
 import { sendMail } from './mail';
 import { roomsFor } from './mcp';
@@ -66,7 +66,8 @@ async function actorForEmail(email: string): Promise<Actor | null> {
 
 export type McpRoom = {
   id: string; name: string; stage: string | null;
-  documents: { id: string; name: string; type: 'pdf'; url: string; expiresAt: string }[];
+  /** `type` is the file extension, e.g. "pdf" or "xlsx". */
+  documents: { id: string; name: string; type: string; url: string; expiresAt: string }[];
 };
 
 /** Accepted, non-revoked memberships only (administrators see every active room). */
@@ -84,7 +85,7 @@ export async function investorDocuments(email: string): Promise<{ member: false 
       // Each link re-checks access when used and records the download with channel MCP.
       documents: documents.map(d => {
         const link = downloadLink(actor.id, room.id, d.id);
-        return { id: d.id, name: pdfFileName(d.name), type: 'pdf' as const, url: link.url, expiresAt: link.expiresAt };
+        return { id: d.id, name: d.fileName, type: d.ext, url: link.url, expiresAt: link.expiresAt };
       }),
     });
   }

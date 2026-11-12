@@ -1,7 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { HuDownloadChannel } from '@prisma/client';
 import { type Actor, actorFor, HttpError, sendError } from '../../lib/access';
-import { actorForUser, downloadableDocuments, recordDownloads, sendPdf, sendZip, verifyDownloadToken } from '../../lib/downloads';
+import { actorForUser, downloadableDocuments, recordDownloads, sendFile, sendZip, verifyDownloadToken } from '../../lib/downloads';
+import { folderPath, loadFolders, placementsFor } from '../../lib/folders';
 
 // GET ?roomId=…&documentId=…   one PDF, signed-in member
 // GET ?roomId=…&all=1          ZIP of every readable document, signed-in member
@@ -28,11 +29,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const document = documents.find(d => d.id === documentId);
       if (!document) throw new HttpError(404, 'Document not found.');
       await recordDownloads(actor, roomId, [document], false, channel);
-      await sendPdf(res, document);
+      await sendFile(res, document);
     } else {
       if (!documents.length) throw new HttpError(404, 'No documents are available in this room yet.');
       await recordDownloads(actor, roomId, documents, true, channel);
-      await sendZip(res, room.name, documents);
+      const [folders, placements] = await Promise.all([loadFolders(), placementsFor(documents.map(d => d.id))]);
+      const paths = new Map(documents.map(d => [d.id, folderPath(folders, placements.get(d.id))]));
+      await sendZip(res, room.name, documents, paths);
     }
   } catch (error) { if (res.headersSent) res.destroy(); else sendError(res, error); }
 }
